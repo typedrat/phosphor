@@ -3,13 +3,13 @@ pub const WAVELENGTH_MIN: f32 = 380.0;
 pub const WAVELENGTH_MAX: f32 = 780.0;
 pub const BAND_WIDTH: f32 = (WAVELENGTH_MAX - WAVELENGTH_MIN) / SPECTRAL_BANDS as f32;
 
-pub fn band_range(band: usize) -> (f32, f32) {
+pub const fn band_range(band: usize) -> (f32, f32) {
     let min = WAVELENGTH_MIN + band as f32 * BAND_WIDTH;
     let max = min + BAND_WIDTH;
     (min, max)
 }
 
-pub fn band_center(band: usize) -> f32 {
+pub const fn band_center(band: usize) -> f32 {
     WAVELENGTH_MIN + (band as f32 + 0.5) * BAND_WIDTH
 }
 

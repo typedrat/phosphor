@@ -14,24 +14,28 @@ const CIE_1931_DATA: [(f32, f64, f64, f64); 471] =
 /// pre-integrated over each spectral band. Used to convert spectral
 /// energy to XYZ tristimulus values.
 ///
-/// Returns a [SPECTRAL_BANDS] array of (x, y, z) tuples.
-pub fn cie_integration_weights() -> [(f32, f32, f32); SPECTRAL_BANDS] {
+/// Computed at compile time as a [SPECTRAL_BANDS] array of (x, y, z) tuples.
+pub const CIE_INTEGRATION_WEIGHTS: [(f32, f32, f32); SPECTRAL_BANDS] = {
     let mut weights = [(0.0f32, 0.0f32, 0.0f32); SPECTRAL_BANDS];
 
-    for band in 0..SPECTRAL_BANDS {
+    let mut band = 0;
+    while band < SPECTRAL_BANDS {
         let (band_min, band_max) = band_range(band);
         let mut sum_x = 0.0f64;
         let mut sum_y = 0.0f64;
         let mut sum_z = 0.0f64;
         let mut count = 0u32;
 
-        for &(wl, x, y, z) in &CIE_1931_DATA {
+        let mut i = 0;
+        while i < CIE_1931_DATA.len() {
+            let (wl, x, y, z) = CIE_1931_DATA[i];
             if wl >= band_min && wl < band_max {
                 sum_x += x;
                 sum_y += y;
                 sum_z += z;
                 count += 1;
             }
+            i += 1;
         }
 
         if count > 0 {
@@ -42,10 +46,12 @@ pub fn cie_integration_weights() -> [(f32, f32, f32); SPECTRAL_BANDS] {
                 (sum_z / n * BAND_WIDTH as f64) as f32,
             );
         }
+
+        band += 1;
     }
 
     weights
-}
+};
 
 #[cfg(test)]
 mod tests {
@@ -102,8 +108,7 @@ mod tests {
 
     #[test]
     fn cie_weights_are_nonnegative_luminance() {
-        let weights = cie_integration_weights();
-        for (x, y, z) in &weights {
+        for (x, y, z) in &CIE_INTEGRATION_WEIGHTS {
             assert!(x.is_finite());
             assert!(y.is_finite());
             assert!(z.is_finite());
