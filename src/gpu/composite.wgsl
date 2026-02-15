@@ -16,8 +16,8 @@ const TONEMAP_NONE: TonemapMode = 3u;
 struct CompositeParams {
     exposure: f32,
     tonemap_mode: TonemapMode,
-    _pad1: f32,
-    _pad2: f32,
+    faceplate_scatter_intensity: f32,
+    _pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -25,6 +25,9 @@ struct CompositeParams {
 // HDR texture from spectral resolve pass (linear sRGB, unbounded).
 // Alpha channel carries CIE Y luminance for luminance-based tonemapping.
 @group(1) @binding(0) var hdr_texture: texture_2d<f32>;
+
+// Faceplate scatter (blurred bright areas) at half resolution.
+@group(2) @binding(0) var faceplate_scatter_texture: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -89,6 +92,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var rgb = hdr.rgb;
     let Y = hdr.a; // CIE Y luminance from spectral resolve
+
+    // Add faceplate_scatter (sampled at half resolution via nearest-neighbor)
+    let faceplate_scatter_coord = coord / 2;
+    let faceplate_scatter = textureLoad(faceplate_scatter_texture, faceplate_scatter_coord, 0).rgb;
+    rgb += faceplate_scatter * params.faceplate_scatter_intensity;
 
     // Exposure
     rgb *= params.exposure;

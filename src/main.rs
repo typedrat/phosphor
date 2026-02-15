@@ -91,6 +91,7 @@ impl ApplicationHandler for App {
                     phosphor.fluorescence.a_fast,
                 );
                 gpu.composite_params.exposure = ui.intensity;
+                gpu.composite_params.faceplate_scatter_intensity = ui.faceplate_scatter_intensity;
 
                 // Run egui frame
                 let egui_output = ui.run(&window);

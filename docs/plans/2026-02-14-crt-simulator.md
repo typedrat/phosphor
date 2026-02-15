@@ -1180,39 +1180,29 @@ git commit -m "feat: add egui side panel with phosphor selector and intensity co
 
 ---
 
-### Task 14: Bloom Post-Processing
+### Task 14: Faceplate Scatter Post-Processing
 
 **Files:**
 
-- Modify: `src/gpu/tonemap.wgsl` or create separate bloom shaders
-- Modify: `src/gpu/mod.rs` (add bloom pipeline)
+- Create: `src/gpu/faceplate_scatter_downsample.wgsl` (threshold downsample shader)
+- Create: `src/gpu/faceplate_scatter_blur.wgsl` (separable Gaussian blur shader)
+- Create: `src/gpu/faceplate_scatter.rs` (FaceplateScatterPipeline, textures, params)
+- Modify: `src/gpu/composite.wgsl` (add scatter texture input)
+- Modify: `src/gpu/composite.rs` (add scatter texture bind group)
+- Modify: `src/gpu/mod.rs` (add faceplate_scatter pipeline, wire into render loop)
 
-**Context:** Halation bloom. Read `docs/design-gpu-pipeline.md` (Stage 3: Bloom).
+**Context:** Faceplate scatter — light scattering through the glass faceplate before exiting. Slots between spectral_resolve and composite in the two-stage display pipeline.
 
-**Step 1: Implement multi-pass bloom**
+**Architecture:**
 
-1. After spectral-to-sRGB (before tonemap), write to intermediate HDR texture
-2. Downsample to 1/4 resolution
-3. Brightness threshold
-4. Separable Gaussian blur (H then V)
-5. Composite bloom onto HDR texture
-6. Tonemap to swapchain
+Pipeline: `spectral_resolve → HDR texture → [scatter downsample → blur H → blur V] → composite (HDR + scatter → tonemap → swapchain)`
 
-**Step 2: Add bloom controls**
+- Two Rgba16Float textures at half resolution (scatter_a, scatter_b) for ping-pong blur
+- Downsample reads HDR texture via `textureLoad` (manual 4-tap average since Rgba32Float isn't filterable), applies brightness threshold
+- Separable Gaussian blur with sigma uniform, kernel cutoff at 3σ, weights computed in shader
+- Composite shader receives scatter texture as second input, adds `scatter * intensity` before exposure+tonemapping
 
-Bloom intensity and radius sliders in the UI.
-
-**Step 3: Visual verification**
-
-Run: `cargo run`
-Bright spots should have a soft glow. Bloom intensity slider adjusts the effect.
-
-**Step 4: Commit**
-
-```bash
-git add src/gpu/ src/ui/
-git commit -m "feat: add bloom post-processing for halation effect"
-```
+**DONE** — Implemented and committed.
 
 ---
 

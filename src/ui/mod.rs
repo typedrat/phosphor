@@ -17,6 +17,7 @@ pub struct UiState {
     pub phosphor_index: usize,
     pub intensity: f32,
     pub focus: f32,
+    pub faceplate_scatter_intensity: f32,
 }
 
 impl UiState {
@@ -38,6 +39,7 @@ impl UiState {
             phosphor_index: 0,
             intensity: 1.0,
             focus: 1.5,
+            faceplate_scatter_intensity: 0.15,
         }
     }
 
@@ -59,6 +61,7 @@ impl UiState {
                 &mut self.phosphor_index,
                 &mut self.intensity,
                 &mut self.focus,
+                &mut self.faceplate_scatter_intensity,
             );
         });
 

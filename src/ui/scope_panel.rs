@@ -6,6 +6,7 @@ pub fn scope_panel(
     phosphor_index: &mut usize,
     intensity: &mut f32,
     focus: &mut f32,
+    faceplate_scatter_intensity: &mut f32,
 ) {
     egui::SidePanel::left("scope_panel")
         .default_width(220.0)
@@ -32,6 +33,9 @@ pub fn scope_panel(
 
             ui.label("Focus");
             ui.add(egui::Slider::new(focus, 0.5..=5.0).text("px"));
+
+            ui.label("Faceplate Scatter");
+            ui.add(egui::Slider::new(faceplate_scatter_intensity, 0.0..=1.0));
 
             ui.separator();
 

@@ -2,6 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::accumulation::HdrBuffer;
+use super::faceplate_scatter::FaceplateScatterTextures;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u32)]
@@ -20,17 +21,17 @@ pub enum TonemapMode {
 pub struct CompositeParams {
     pub exposure: f32,
     tonemap_mode: u32,
-    _pad1: f32,
-    _pad2: f32,
+    pub faceplate_scatter_intensity: f32,
+    _pad: f32,
 }
 
 impl CompositeParams {
-    pub fn new(exposure: f32, mode: TonemapMode) -> Self {
+    pub fn new(exposure: f32, mode: TonemapMode, faceplate_scatter_intensity: f32) -> Self {
         Self {
             exposure,
             tonemap_mode: mode as u32,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            faceplate_scatter_intensity,
+            _pad: 0.0,
         }
     }
 
@@ -51,7 +52,8 @@ impl CompositeParams {
 pub struct CompositePipeline {
     pipeline: wgpu::RenderPipeline,
     params_bind_group_layout: wgpu::BindGroupLayout,
-    texture_bind_group_layout: wgpu::BindGroupLayout,
+    hdr_bind_group_layout: wgpu::BindGroupLayout,
+    faceplate_scatter_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl CompositePipeline {
@@ -76,7 +78,7 @@ impl CompositePipeline {
                 }],
             });
 
-        let texture_bind_group_layout =
+        let hdr_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("composite_hdr_texture"),
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -91,9 +93,28 @@ impl CompositePipeline {
                 }],
             });
 
+        let faceplate_scatter_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("composite_faceplate_scatter_texture"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("composite"),
-            bind_group_layouts: &[&params_bind_group_layout, &texture_bind_group_layout],
+            bind_group_layouts: &[
+                &params_bind_group_layout,
+                &hdr_bind_group_layout,
+                &faceplate_scatter_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -129,7 +150,8 @@ impl CompositePipeline {
         Self {
             pipeline,
             params_bind_group_layout,
-            texture_bind_group_layout,
+            hdr_bind_group_layout,
+            faceplate_scatter_bind_group_layout,
         }
     }
 
@@ -140,6 +162,7 @@ impl CompositePipeline {
         target: &wgpu::TextureView,
         params: &CompositeParams,
         hdr: &HdrBuffer,
+        faceplate_scatter: &FaceplateScatterTextures,
     ) {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("composite_params"),
@@ -156,12 +179,22 @@ impl CompositePipeline {
             }],
         });
 
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let hdr_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("composite_hdr_texture"),
-            layout: &self.texture_bind_group_layout,
+            layout: &self.hdr_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::TextureView(&hdr.view),
+            }],
+        });
+
+        // FaceplateScatter result is in view_a after the blur passes
+        let faceplate_scatter_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("composite_faceplate_scatter_texture"),
+            layout: &self.faceplate_scatter_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&faceplate_scatter.view_a),
             }],
         });
 
@@ -182,7 +215,8 @@ impl CompositePipeline {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &params_bind_group, &[]);
-        pass.set_bind_group(1, &texture_bind_group, &[]);
+        pass.set_bind_group(1, &hdr_bind_group, &[]);
+        pass.set_bind_group(2, &faceplate_scatter_bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

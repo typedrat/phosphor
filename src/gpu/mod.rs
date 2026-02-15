@@ -2,6 +2,7 @@ pub mod accumulation;
 pub mod beam_write;
 pub mod composite;
 pub mod decay;
+pub mod faceplate_scatter;
 pub mod spectral_resolve;
 
 use std::sync::Arc;
@@ -20,6 +21,9 @@ use self::accumulation::{AccumulationBuffer, HdrBuffer};
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
 use self::composite::{CompositeParams, CompositePipeline, TonemapMode};
 use self::decay::{DecayParams, DecayPipeline};
+use self::faceplate_scatter::{
+    FaceplateScatterParams, FaceplateScatterPipeline, FaceplateScatterTextures,
+};
 use self::spectral_resolve::{SpectralResolveParams, SpectralResolvePipeline};
 
 pub struct GpuState {
@@ -36,6 +40,9 @@ pub struct GpuState {
     pub decay_params: DecayParams,
     pub spectral_resolve: SpectralResolvePipeline,
     pub spectral_resolve_params: SpectralResolveParams,
+    pub faceplate_scatter: FaceplateScatterPipeline,
+    pub faceplate_scatter_textures: FaceplateScatterTextures,
+    pub faceplate_scatter_params: FaceplateScatterParams,
     pub composite: CompositePipeline,
     pub composite_params: CompositeParams,
     pub egui_renderer: egui_wgpu::Renderer,
@@ -134,13 +141,19 @@ impl GpuState {
         let spectral_resolve = SpectralResolvePipeline::new(&device);
         let spectral_resolve_params = SpectralResolveParams::new();
 
+        let faceplate_scatter = FaceplateScatterPipeline::new(&device);
+        let faceplate_scatter_textures =
+            FaceplateScatterTextures::new(&device, surface_config.width, surface_config.height);
+        let faceplate_scatter_params = FaceplateScatterParams::default();
+
         let composite = CompositePipeline::new(&device, format);
         let tonemap_mode = if hdr_output {
             TonemapMode::None
         } else {
             TonemapMode::default()
         };
-        let composite_params = CompositeParams::new(1.0, tonemap_mode);
+        let composite_params =
+            CompositeParams::new(1.0, tonemap_mode, faceplate_scatter_params.intensity);
 
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
 
@@ -158,6 +171,9 @@ impl GpuState {
             decay_params,
             spectral_resolve,
             spectral_resolve_params,
+            faceplate_scatter,
+            faceplate_scatter_textures,
+            faceplate_scatter_params,
             composite,
             composite_params,
             egui_renderer,
@@ -173,6 +189,8 @@ impl GpuState {
             self.surface.configure(&self.device, &self.surface_config);
             self.accum.resize(&self.device, width, height);
             self.hdr.resize(&self.device, width, height);
+            self.faceplate_scatter_textures
+                .resize(&self.device, width, height);
             self.beam_params.width = width;
             self.beam_params.height = height;
         }
@@ -226,13 +244,23 @@ impl GpuState {
             &self.accum,
         );
 
-        // Composite pass: HDR texture → sRGB display
+        // FaceplateScatter passes: downsample HDR → blur H → blur V
+        self.faceplate_scatter.render(
+            &self.device,
+            &mut encoder,
+            &self.hdr,
+            &self.faceplate_scatter_textures,
+            &self.faceplate_scatter_params,
+        );
+
+        // Composite pass: HDR + faceplate_scatter → display
         self.composite.render(
             &self.device,
             &mut encoder,
             &view,
             &self.composite_params,
             &self.hdr,
+            &self.faceplate_scatter_textures,
         );
 
         // egui overlay pass
