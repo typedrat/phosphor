@@ -1,4 +1,4 @@
-use super::BeamSample;
+use super::{BeamSample, BeamSource, BeamState};
 
 pub enum Waveform {
     Sine,
@@ -55,15 +55,26 @@ pub struct OscilloscopeSource {
     pub x_channel: ChannelConfig,
     pub y_channel: ChannelConfig,
     pub sample_rate: f32,
+    t_current: f32,
 }
 
 impl OscilloscopeSource {
-    /// Generate `count` samples starting at simulated time `t_start`.
-    pub fn generate(&self, t_start: f32, count: usize) -> Vec<BeamSample> {
+    pub fn new(x_channel: ChannelConfig, y_channel: ChannelConfig, sample_rate: f32) -> Self {
+        Self {
+            x_channel,
+            y_channel,
+            sample_rate,
+            t_current: 0.0,
+        }
+    }
+}
+
+impl BeamSource for OscilloscopeSource {
+    fn generate(&mut self, count: usize, _beam: &BeamState) -> Vec<BeamSample> {
         let dt = 1.0 / self.sample_rate;
-        (0..count)
+        let samples = (0..count)
             .map(|i| {
-                let t = t_start + i as f32 * dt;
+                let t = self.t_current + i as f32 * dt;
                 BeamSample {
                     x: eval_channel(&self.x_channel, t),
                     y: eval_channel(&self.y_channel, t),
@@ -71,7 +82,9 @@ impl OscilloscopeSource {
                     dt,
                 }
             })
-            .collect()
+            .collect();
+        self.t_current += count as f32 * dt;
+        samples
     }
 }
 
@@ -79,27 +92,29 @@ impl OscilloscopeSource {
 mod tests {
     use super::*;
 
+    const TEST_BEAM: BeamState = BeamState { spot_radius: 0.001 };
+
     #[test]
     fn sine_generates_correct_range() {
-        let src = OscilloscopeSource {
-            x_channel: ChannelConfig {
+        let mut src = OscilloscopeSource::new(
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 1.0,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            y_channel: ChannelConfig {
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 1.0,
                 phase: std::f32::consts::FRAC_PI_2,
                 dc_offset: 0.0,
             },
-            sample_rate: 1000.0,
-        };
+            1000.0,
+        );
 
-        let samples = src.generate(0.0, 1000);
+        let samples = src.generate(1000, &TEST_BEAM);
         assert_eq!(samples.len(), 1000);
 
         for s in &samples {
@@ -111,25 +126,25 @@ mod tests {
 
     #[test]
     fn sine_cosine_makes_circle() {
-        let src = OscilloscopeSource {
-            x_channel: ChannelConfig {
+        let mut src = OscilloscopeSource::new(
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 0.4,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            y_channel: ChannelConfig {
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 0.4,
                 phase: std::f32::consts::FRAC_PI_2,
                 dc_offset: 0.0,
             },
-            sample_rate: 1000.0,
-        };
+            1000.0,
+        );
 
-        let samples = src.generate(0.0, 1000);
+        let samples = src.generate(1000, &TEST_BEAM);
         for s in &samples {
             let dx = s.x - 0.5;
             let dy = s.y - 0.5;
@@ -140,25 +155,25 @@ mod tests {
 
     #[test]
     fn square_wave_is_binary() {
-        let src = OscilloscopeSource {
-            x_channel: ChannelConfig {
+        let mut src = OscilloscopeSource::new(
+            ChannelConfig {
                 waveform: Waveform::Square,
                 frequency: 10.0,
                 amplitude: 1.0,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            y_channel: ChannelConfig {
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 1.0,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            sample_rate: 10000.0,
-        };
+            10000.0,
+        );
 
-        let samples = src.generate(0.0, 10000);
+        let samples = src.generate(10000, &TEST_BEAM);
         for s in &samples {
             assert!(s.x < 0.01 || s.x > 0.99, "x={} not binary", s.x);
         }
@@ -166,25 +181,25 @@ mod tests {
 
     #[test]
     fn dt_matches_sample_rate() {
-        let src = OscilloscopeSource {
-            x_channel: ChannelConfig {
+        let mut src = OscilloscopeSource::new(
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 1.0,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            y_channel: ChannelConfig {
+            ChannelConfig {
                 waveform: Waveform::Sine,
                 frequency: 1.0,
                 amplitude: 1.0,
                 phase: 0.0,
                 dc_offset: 0.0,
             },
-            sample_rate: 44100.0,
-        };
+            44100.0,
+        );
 
-        let samples = src.generate(0.0, 100);
+        let samples = src.generate(100, &TEST_BEAM);
         for s in &samples {
             assert!((s.dt - 1.0 / 44100.0).abs() < 1e-9);
         }

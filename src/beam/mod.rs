@@ -1,5 +1,26 @@
 pub mod audio;
+pub mod external;
 pub mod oscilloscope;
+pub mod vector;
+
+/// Current beam physics parameters, shared with input sources that need
+/// them for sample generation (e.g. vector subdivision density).
+#[derive(Clone, Debug)]
+pub struct BeamState {
+    /// Minimum spot radius in normalized screen coords.
+    /// Used to determine subdivision density — consecutive samples should
+    /// be within this distance to guarantee Gaussian overlap.
+    pub spot_radius: f32,
+}
+
+/// Common interface for all beam input sources.
+///
+/// `count` is a request — sources return up to that many samples.
+/// Sources that produce a fixed batch (e.g. vector display lists) may
+/// ignore `count` and return their natural output size.
+pub trait BeamSource {
+    fn generate(&mut self, count: usize, beam: &BeamState) -> Vec<BeamSample>;
+}
 
 /// A single beam position sample.
 #[repr(C)]

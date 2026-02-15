@@ -8,7 +8,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use super::BeamSample;
+use super::{BeamSample, BeamSource, BeamState};
 
 pub struct AudioSource {
     samples: Vec<(f32, f32)>,
@@ -92,25 +92,6 @@ impl AudioSource {
         })
     }
 
-    pub fn generate(&mut self, count: usize) -> Vec<BeamSample> {
-        let dt = 1.0 / self.sample_rate as f32;
-        let remaining = self.samples.len().saturating_sub(self.position);
-        let n = count.min(remaining);
-
-        let result = self.samples[self.position..self.position + n]
-            .iter()
-            .map(|&(l, r)| BeamSample {
-                x: (l + 1.0) / 2.0,
-                y: (r + 1.0) / 2.0,
-                intensity: 1.0,
-                dt,
-            })
-            .collect();
-
-        self.position += n;
-        result
-    }
-
     pub fn seek(&mut self, fraction: f32) {
         let fraction = fraction.clamp(0.0, 1.0);
         self.position = (fraction * self.samples.len() as f32) as usize;
@@ -130,9 +111,32 @@ impl AudioSource {
     }
 }
 
+impl BeamSource for AudioSource {
+    fn generate(&mut self, count: usize, _beam: &BeamState) -> Vec<BeamSample> {
+        let dt = 1.0 / self.sample_rate as f32;
+        let remaining = self.samples.len().saturating_sub(self.position);
+        let n = count.min(remaining);
+
+        let result = self.samples[self.position..self.position + n]
+            .iter()
+            .map(|&(l, r)| BeamSample {
+                x: (l + 1.0) / 2.0,
+                y: (r + 1.0) / 2.0,
+                intensity: 1.0,
+                dt,
+            })
+            .collect();
+
+        self.position += n;
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_BEAM: BeamState = BeamState { spot_radius: 0.001 };
 
     /// Create a minimal WAV file with known content (IEEE float, stereo).
     fn make_test_wav(samples: &[(f32, f32)], sample_rate: u32) -> Vec<u8> {
@@ -169,7 +173,7 @@ mod tests {
         std::fs::write(&tmp, &wav).unwrap();
 
         let mut src = AudioSource::load(&tmp).unwrap();
-        let beams = src.generate(3);
+        let beams = src.generate(3, &TEST_BEAM);
 
         assert!((beams[0].x - 0.5).abs() < 0.01); // (0,0) -> (0.5, 0.5)
         assert!((beams[0].y - 0.5).abs() < 0.01);
@@ -189,7 +193,7 @@ mod tests {
         std::fs::write(&tmp, &wav).unwrap();
 
         let mut src = AudioSource::load(&tmp).unwrap();
-        let beams = src.generate(10);
+        let beams = src.generate(10, &TEST_BEAM);
         for b in &beams {
             assert!((b.dt - 1.0 / 48000.0).abs() < 1e-9);
         }
