@@ -81,23 +81,36 @@ impl ApplicationHandler for App {
 
                 // Apply UI state to GPU parameters
                 let phosphor = ui.selected_phosphor();
+                let eng = &ui.engineer;
+
+                // Beam — scope focus overrides core sigma, engineer controls the rest
                 gpu.beam_params.sigma_core = ui.focus;
-                gpu.decay_params = gpu::decay::DecayParams::new(
-                    phosphor.fluorescence.tau_fast,
-                    phosphor.fluorescence.tau_slow,
-                );
+                gpu.beam_params.sigma_halo = eng.sigma_halo;
+                gpu.beam_params.halo_fraction = eng.halo_fraction;
+
+                // Decay — phosphor type sets defaults, engineer can override
+                gpu.decay_params = gpu::decay::DecayParams::new(eng.tau_fast, eng.tau_slow);
                 gpu.emission_params = gpu::beam_write::EmissionParams::new(
                     &phosphor.fluorescence.emission_weights,
-                    phosphor.fluorescence.a_fast,
+                    eng.a_fast,
                 );
+
+                // Faceplate scatter
+                gpu.faceplate_scatter_params.threshold = eng.scatter_threshold;
+                gpu.faceplate_scatter_params.sigma = eng.scatter_sigma;
+                gpu.faceplate_scatter_params.intensity = eng.scatter_intensity;
+
+                // Composite / display
                 gpu.composite_params.exposure = ui.intensity;
-                gpu.composite_params.faceplate_scatter_intensity = ui.faceplate_scatter_intensity;
-                gpu.composite_params.glass_tint = ui.glass_tint;
-                gpu.composite_params.curvature = ui.curvature;
-                gpu.composite_params.edge_falloff = ui.edge_falloff;
+                gpu.composite_params.set_mode(eng.tonemap_mode);
+                gpu.composite_params.faceplate_scatter_intensity = eng.scatter_intensity;
+                gpu.composite_params.glass_tint = eng.glass_tint;
+                gpu.composite_params.curvature = eng.curvature;
+                gpu.composite_params.edge_falloff = eng.edge_falloff;
 
                 // Run egui frame
-                let egui_output = ui.run(&window);
+                let timings = gpu.profiler.as_ref().map(|p| &p.history);
+                let egui_output = ui.run(&window, timings);
 
                 match gpu.render(&[], Some(&egui_output)) {
                     Ok(()) => {}

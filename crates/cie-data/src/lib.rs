@@ -1,9 +1,8 @@
 //! Proc macro that embeds the official CIE 1931 2-degree standard observer
 //! color matching functions from a CSV file at compile time.
 //!
-//! Source: CIE 018:2019
-//! URL: https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer
-//! DOI: 10.25039/CIE.DS.xvudnb9b
+//! Source: [CIE 018:2019](https://cie.co.at/datatable/cie-1931-colour-matching-functions-2-degree-observer)
+//! DOI: [10.25039/CIE.DS.xvudnb9b](https://doi.org/10.25039/CIE.DS.xvudnb9b)
 
 use proc_macro::TokenStream;
 use std::path::PathBuf;

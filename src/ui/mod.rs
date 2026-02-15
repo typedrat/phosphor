@@ -3,7 +3,10 @@ pub mod scope_panel;
 
 use winit::window::Window;
 
+use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
+
+pub use engineer_panel::EngineerState;
 
 #[derive(Default, PartialEq)]
 pub enum PanelTab {
@@ -25,11 +28,9 @@ pub struct UiState {
     pub phosphor_index: usize,
     pub intensity: f32,
     pub focus: f32,
-    pub faceplate_scatter_intensity: f32,
-    pub glass_tint: [f32; 3],
-    pub curvature: f32,
-    pub edge_falloff: f32,
+    pub engineer: EngineerState,
     tab: PanelTab,
+    panel_visible: bool,
 }
 
 impl UiState {
@@ -51,11 +52,9 @@ impl UiState {
             phosphor_index: 0,
             intensity: 1.0,
             focus: 1.5,
-            faceplate_scatter_intensity: 0.15,
-            glass_tint: [0.92, 0.95, 0.92],
-            curvature: 0.0,
-            edge_falloff: 0.0,
+            engineer: EngineerState::default(),
             tab: PanelTab::default(),
+            panel_visible: true,
         }
     }
 
@@ -67,36 +66,58 @@ impl UiState {
         self.winit_state.on_window_event(window, event)
     }
 
-    pub fn run(&mut self, window: &Window) -> EguiRenderOutput {
+    pub fn run(&mut self, window: &Window, timings: Option<&TimingHistory>) -> EguiRenderOutput {
         let raw_input = self.winit_state.take_egui_input(window);
+        let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
 
         let full_output = self.ctx.run(raw_input, |ctx| {
-            egui::SidePanel::left("control_panel")
-                .default_width(220.0)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
-                        ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
-                    });
-                    ui.separator();
+            if self.panel_visible {
+                egui::SidePanel::left("control_panel")
+                    .default_width(220.0)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
+                            ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("\u{00d7}").clicked() {
+                                        self.panel_visible = false;
+                                    }
+                                },
+                            );
+                        });
+                        ui.separator();
 
-                    match self.tab {
-                        PanelTab::Scope => scope_panel::scope_panel(
-                            ui,
-                            &self.phosphors,
-                            &mut self.phosphor_index,
-                            &mut self.intensity,
-                            &mut self.focus,
-                            &mut self.faceplate_scatter_intensity,
-                        ),
-                        PanelTab::Engineer => engineer_panel::engineer_panel(
-                            ui,
-                            &mut self.glass_tint,
-                            &mut self.curvature,
-                            &mut self.edge_falloff,
-                        ),
-                    }
-                });
+                        match self.tab {
+                            PanelTab::Scope => scope_panel::scope_panel(
+                                ui,
+                                &self.phosphors,
+                                &mut self.phosphor_index,
+                                &mut self.intensity,
+                                &mut self.focus,
+                            ),
+                            PanelTab::Engineer => {
+                                engineer_panel::engineer_panel(
+                                    ui,
+                                    &mut self.engineer,
+                                    &self.phosphors,
+                                    &mut self.phosphor_index,
+                                    fps,
+                                    timings,
+                                );
+                            }
+                        }
+                    });
+            } else {
+                egui::Area::new(egui::Id::new("panel_toggle"))
+                    .fixed_pos(egui::pos2(8.0, 8.0))
+                    .show(ctx, |ui| {
+                        if ui.button("\u{2630}").clicked() {
+                            self.panel_visible = true;
+                        }
+                    });
+            }
         });
 
         self.winit_state

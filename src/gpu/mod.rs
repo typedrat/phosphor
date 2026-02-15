@@ -3,6 +3,7 @@ pub mod beam_write;
 pub mod composite;
 pub mod decay;
 pub mod faceplate_scatter;
+pub mod profiler;
 pub mod spectral_resolve;
 
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use self::decay::{DecayParams, DecayPipeline};
 use self::faceplate_scatter::{
     FaceplateScatterParams, FaceplateScatterPipeline, FaceplateScatterTextures,
 };
+use self::profiler::{GpuProfiler, GpuQuery};
 use self::spectral_resolve::{SpectralResolveParams, SpectralResolvePipeline};
 
 pub struct GpuState {
@@ -48,6 +50,7 @@ pub struct GpuState {
     pub egui_renderer: egui_wgpu::Renderer,
     /// Whether the swapchain surface supports HDR output.
     pub hdr_output: bool,
+    pub profiler: Option<GpuProfiler>,
     last_frame: Instant,
 }
 
@@ -69,13 +72,26 @@ impl GpuState {
 
         log::info!("GPU adapter: {}", adapter.get_info().name);
 
+        let mut features = wgpu::Features::FLOAT32_FILTERABLE;
+        let has_timestamps = GpuProfiler::supports_timestamps(&adapter);
+        if has_timestamps {
+            features |= wgpu::Features::TIMESTAMP_QUERY;
+            features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("phosphor"),
-            required_features: wgpu::Features::FLOAT32_FILTERABLE,
+            required_features: features,
             required_limits: wgpu::Limits::default(),
             ..Default::default()
         }))
         .expect("failed to create GPU device");
+
+        let profiler = if has_timestamps {
+            Some(GpuProfiler::new(&device, &queue))
+        } else {
+            None
+        };
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -159,6 +175,7 @@ impl GpuState {
         Self {
             device,
             queue,
+            profiler,
             surface,
             surface_config,
             accum,
@@ -209,11 +226,21 @@ impl GpuState {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let beam_sample_count = samples.len() as u32;
+        if let Some(profiler) = &mut self.profiler {
+            profiler.read_back(&self.device, beam_sample_count);
+        }
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+
+        // Start of GPU work
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::FrameStart);
+        }
 
         // Beam write pass
         if !samples.is_empty() {
@@ -228,11 +255,17 @@ impl GpuState {
                 &self.accum,
             );
         }
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterBeamWrite);
+        }
 
         // Decay pass
         let decay_params = self.decay_params.with_dt(dt);
         self.decay
             .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterDecay);
+        }
 
         // Spectral resolve pass: accumulation textures → HDR texture
         self.spectral_resolve.render(
@@ -242,6 +275,9 @@ impl GpuState {
             &self.spectral_resolve_params,
             &self.accum,
         );
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterSpectralResolve);
+        }
 
         // FaceplateScatter passes: downsample HDR → blur H → blur V
         self.faceplate_scatter.render(
@@ -251,6 +287,9 @@ impl GpuState {
             &self.faceplate_scatter_textures,
             &self.faceplate_scatter_params,
         );
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterFaceplateScatter);
+        }
 
         // Composite pass: HDR + faceplate_scatter → display
         self.composite.render(
@@ -261,6 +300,11 @@ impl GpuState {
             &self.hdr,
             &self.faceplate_scatter_textures,
         );
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterComposite);
+            // Resolve all queries into the buffer for reading next frame
+            profiler.resolve(&mut encoder);
+        }
 
         // egui overlay pass
         if let Some(egui) = egui {

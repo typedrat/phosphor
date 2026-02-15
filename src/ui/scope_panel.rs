@@ -6,7 +6,6 @@ pub fn scope_panel(
     phosphor_index: &mut usize,
     intensity: &mut f32,
     focus: &mut f32,
-    faceplate_scatter_intensity: &mut f32,
 ) {
     ui.heading("Phosphor");
 
@@ -30,14 +29,4 @@ pub fn scope_panel(
 
     ui.label("Focus");
     ui.add(egui::Slider::new(focus, 0.5..=5.0).text("px"));
-
-    ui.label("Faceplate Scatter");
-    ui.add(egui::Slider::new(faceplate_scatter_intensity, 0.0..=1.0));
-
-    ui.separator();
-
-    ui.label(format!(
-        "FPS: {:.0}",
-        1.0 / ui.ctx().input(|i| i.predicted_dt)
-    ));
 }
