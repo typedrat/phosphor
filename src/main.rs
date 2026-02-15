@@ -60,7 +60,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let Some(gpu) = &mut self.gpu else { return };
-                match gpu.render() {
+                match gpu.render(&[]) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);

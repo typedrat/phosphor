@@ -1,14 +1,24 @@
 pub mod accumulation;
+pub mod beam_write;
 
 use std::sync::Arc;
 
 use winit::window::Window;
+
+use crate::beam::BeamSample;
+
+use self::accumulation::AccumulationBuffer;
+use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
 
 pub struct GpuState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
+    pub accum: AccumulationBuffer,
+    pub beam_write: BeamWritePipeline,
+    pub beam_params: BeamParams,
+    pub emission_params: EmissionParams,
 }
 
 impl GpuState {
@@ -58,11 +68,33 @@ impl GpuState {
         };
         surface.configure(&device, &surface_config);
 
+        // Single layer for now (8 textures: 4 fast + 4 slow)
+        let accum =
+            AccumulationBuffer::new(&device, surface_config.width, surface_config.height, 1);
+
+        let beam_write = BeamWritePipeline::new(&device);
+
+        // Default beam parameters — will be configurable via UI later
+        let beam_params = BeamParams::new(
+            1.5,  // sigma_core (pixels)
+            6.0,  // sigma_halo (pixels)
+            0.03, // halo_fraction
+            surface_config.width,
+            surface_config.height,
+        );
+
+        // Default P1 green phosphor emission — uniform across bands for now
+        let emission_params = EmissionParams::new(&[1.0 / 16.0; 16], 0.7);
+
         Self {
             device,
             queue,
             surface,
             surface_config,
+            accum,
+            beam_write,
+            beam_params,
+            emission_params,
         }
     }
 
@@ -71,10 +103,13 @@ impl GpuState {
             self.surface_config.width = width;
             self.surface_config.height = height;
             self.surface.configure(&self.device, &self.surface_config);
+            self.accum.resize(&self.device, width, height);
+            self.beam_params.width = width;
+            self.beam_params.height = height;
         }
     }
 
-    pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&mut self, samples: &[BeamSample]) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -83,10 +118,24 @@ impl GpuState {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("clear"),
+                label: Some("frame"),
             });
 
-        // Clear to black
+        // Beam write pass
+        if !samples.is_empty() {
+            let params = self.beam_params.with_sample_count(samples.len() as u32);
+            self.beam_write.dispatch(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                samples,
+                &params,
+                &self.emission_params,
+                &self.accum,
+            );
+        }
+
+        // Clear and present (tonemap shader replaces this later)
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
