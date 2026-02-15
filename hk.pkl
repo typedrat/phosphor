@@ -1,0 +1,89 @@
+amends "package://github.com/jdx/hk/releases/download/v1.25.0/hk@1.25.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.25.0/hk@1.25.0#/Builtins.pkl"
+
+default_branch = "main"
+
+// Define linters to use across hooks
+local linters = new Mapping<String, Step> {
+  // Nix:
+  ["alejandra"] = (Builtins.alejandra) {
+    check = "alejandra --check --quiet {{files}}"
+    fix = "alejandra --quiet {{files}}"
+  }
+
+  ["deadnix"] = new Step {
+    glob = List("**/*.nix")
+    check = "deadnix --fail --no-lambda-pattern-names {{files}}"
+    fix = "deadnix --no-lambda-pattern-names --edit {{files}}"
+    batch = true
+  }
+
+  ["statix"] = new Step {
+    glob = List("**/*.nix")
+    check = "statix check -- {{files}}"
+    fix = "statix fix -- {{files}}"
+    batch = true
+  }
+
+  // Rust:
+  ["rustfmt"] = Builtins.rustfmt
+
+  // WGSL:
+  ["wgslfmt"] = new Step {
+    glob = List("**/*.wgsl")
+    check = "wgslfmt --check {{files}}"
+    fix = "wgslfmt {{files}}"
+    batch = true
+  }
+
+  // TOML:
+  ["taplo"] = Builtins.taplo
+
+  // Markdown:
+  ["prettier"] = (Builtins.prettier) {
+    glob = List("**/*.md")
+  }
+
+  // Builtins:
+  ["check_merge_conflict"] = Builtins.check_merge_conflict
+  ["check_symlinks"] = Builtins.check_symlinks
+  ["mixed_line_ending"] = Builtins.mixed_line_ending
+  ["newlines"] = Builtins.newlines
+  ["trailing_whitespace"] = Builtins.trailing_whitespace
+}
+
+// Clippy is too slow for pre-commit, define separately
+local slow_linters = new Mapping<String, Step> {
+  ...linters
+  ["cargo-clippy"] = (Builtins.cargo_clippy) {
+    check = "cargo clippy --all-targets -- --deny warnings"
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    // Enable automatic fixes
+    fix = true
+    // Stash unstaged changes
+    stash = "git"
+    steps = linters
+  }
+  ["pre-push"] {
+    // Just check, don't fix — includes clippy
+    steps = slow_linters
+  }
+  ["commit-msg"] {
+    steps {
+      ["gitlint"] = new Step {
+        check = "gitlint --msg-filename {{commit_msg_file}}"
+      }
+    }
+  }
+  ["check"] {
+    steps = slow_linters
+  }
+  ["fix"] {
+    fix = true
+    steps = linters
+  }
+}
