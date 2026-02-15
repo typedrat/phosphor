@@ -3,6 +3,7 @@ use wgpu::util::DeviceExt;
 
 use crate::phosphor::spectral::CIE_INTEGRATION_WEIGHTS;
 
+use super::SPECTRAL_CONSTANTS;
 use super::accumulation::AccumulationBuffer;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -96,18 +97,16 @@ impl TonemapPipeline {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("tonemap_textures"),
-                entries: &(0..8)
-                    .map(|i| wgpu::BindGroupLayoutEntry {
-                        binding: i,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    })
-                    .collect::<Vec<_>>(),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
             });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -122,7 +121,10 @@ impl TonemapPipeline {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: SPECTRAL_CONSTANTS,
+                    ..Default::default()
+                },
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState {
@@ -134,7 +136,10 @@ impl TonemapPipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: SPECTRAL_CONSTANTS,
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: None,
@@ -178,16 +183,10 @@ impl TonemapPipeline {
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap_textures"),
             layout: &self.texture_bind_group_layout,
-            entries: &accum
-                .views
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(i, view)| wgpu::BindGroupEntry {
-                    binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(view),
-                })
-                .collect::<Vec<_>>(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&accum.view),
+            }],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

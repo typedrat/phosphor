@@ -1,8 +1,10 @@
 // Tonemap / Display Fragment Shader
 //
-// Full-screen triangle that reads all accumulation textures, integrates
+// Full-screen triangle that reads the accumulation texture array, integrates
 // spectral energy to CIE XYZ, converts to sRGB, and tonemaps for display.
 // Bloom, glass tint, and curvature are added in later tasks.
+
+override SPECTRAL_BANDS: u32 = 16u;
 
 // Tonemap modes (selected via params.tonemap_mode)
 alias TonemapMode = u32;
@@ -13,7 +15,7 @@ const TONEMAP_CLAMP: TonemapMode = 2u;
 
 struct TonemapParams {
     // CIE 1931 color matching function weights per spectral band,
-    // packed as 4 vec4s per channel (4 bands per vec4, matching texture RGBA).
+    // packed as 4 vec4s per channel (4 bands per vec4).
     cie_x: array<vec4<f32>, 4>,
     cie_y: array<vec4<f32>, 4>,
     cie_z: array<vec4<f32>, 4>,
@@ -25,16 +27,8 @@ struct TonemapParams {
 
 @group(0) @binding(0) var<uniform> params: TonemapParams;
 
-// Accumulation textures bound as sampled textures for reading.
-// 0-3 = fast decay, 4-7 = slow decay.
-@group(1) @binding(0) var accum_0: texture_2d<f32>;
-@group(1) @binding(1) var accum_1: texture_2d<f32>;
-@group(1) @binding(2) var accum_2: texture_2d<f32>;
-@group(1) @binding(3) var accum_3: texture_2d<f32>;
-@group(1) @binding(4) var accum_4: texture_2d<f32>;
-@group(1) @binding(5) var accum_5: texture_2d<f32>;
-@group(1) @binding(6) var accum_6: texture_2d<f32>;
-@group(1) @binding(7) var accum_7: texture_2d<f32>;
+// Accumulation texture array bound as sampled texture for reading.
+@group(1) @binding(0) var accum: texture_2d_array<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -49,6 +43,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     let y = f32((vi >> 1u) & 1u) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
     return out;
+}
+
+fn get_cie_weight(channel: u32, band: u32) -> f32 {
+    let vec_idx = band / 4u;
+    let comp_idx = band % 4u;
+    switch channel {
+        case 0u: { return params.cie_x[vec_idx][comp_idx]; }
+        case 1u: { return params.cie_y[vec_idx][comp_idx]; }
+        default: { return params.cie_z[vec_idx][comp_idx]; }
+    }
 }
 
 // Luminance-preserving desaturation for out-of-gamut colors.
@@ -108,19 +112,20 @@ fn apply_tonemap(rgb: vec3<f32>, luminance: f32, mode: TonemapMode) -> vec3<f32>
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(in.position.xy);
 
-    // Sum fast + slow decay for each texture pair (4 spectral bands per vec4)
-    let s0 = textureLoad(accum_0, coord, 0) + textureLoad(accum_4, coord, 0);
-    let s1 = textureLoad(accum_1, coord, 0) + textureLoad(accum_5, coord, 0);
-    let s2 = textureLoad(accum_2, coord, 0) + textureLoad(accum_6, coord, 0);
-    let s3 = textureLoad(accum_3, coord, 0) + textureLoad(accum_7, coord, 0);
+    // Integrate spectral energy to CIE XYZ
+    var X = 0.0;
+    var Y = 0.0;
+    var Z = 0.0;
 
-    // CIE XYZ integration via dot products (4 bands at a time)
-    let X = dot(s0, params.cie_x[0]) + dot(s1, params.cie_x[1])
-          + dot(s2, params.cie_x[2]) + dot(s3, params.cie_x[3]);
-    let Y = dot(s0, params.cie_y[0]) + dot(s1, params.cie_y[1])
-          + dot(s2, params.cie_y[2]) + dot(s3, params.cie_y[3]);
-    let Z = dot(s0, params.cie_z[0]) + dot(s1, params.cie_z[1])
-          + dot(s2, params.cie_z[2]) + dot(s3, params.cie_z[3]);
+    for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+        // Sum fast + slow decay for this band
+        let energy = textureLoad(accum, coord, band, 0).r
+                   + textureLoad(accum, coord, SPECTRAL_BANDS + band, 0).r;
+
+        X += energy * get_cie_weight(0u, band);
+        Y += energy * get_cie_weight(1u, band);
+        Z += energy * get_cie_weight(2u, band);
+    }
 
     // XYZ → linear sRGB (IEC 61966-2-1)
     var rgb = vec3<f32>(

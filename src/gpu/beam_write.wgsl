@@ -1,8 +1,10 @@
 // Beam Write Compute Shader
 //
 // For each BeamSample, splats a Gaussian spot profile into the spectral
-// accumulation textures. One workgroup per sample, threads cooperatively
+// accumulation texture array. One workgroup per sample, threads cooperatively
 // cover the spot footprint tile.
+
+override SPECTRAL_BANDS: u32 = 16u;
 
 struct BeamSample {
     x: f32,
@@ -25,8 +27,6 @@ struct BeamParams {
 }
 
 // Per-band emission weight and fast/slow amplitude split.
-// emission[i].x = emission weight for band i
-// emission[i].y = fast decay amplitude fraction (a_fast)
 struct EmissionParams {
     weights: array<vec4<f32>, 4>,  // 16 bands packed as 4 vec4s
     fast_fraction: f32,
@@ -39,16 +39,8 @@ struct EmissionParams {
 @group(0) @binding(1) var<uniform> params: BeamParams;
 @group(0) @binding(2) var<uniform> emission: EmissionParams;
 
-// Accumulation textures: 4 per component, 2 components (fast/slow) per layer.
-// For single-layer: textures 0-3 = fast decay, 4-7 = slow decay.
-@group(1) @binding(0) var accum_0: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(1) var accum_1: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(2) var accum_2: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(3) var accum_3: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(4) var accum_4: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(5) var accum_5: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(6) var accum_6: texture_storage_2d<rgba32float, read_write>;
-@group(1) @binding(7) var accum_7: texture_storage_2d<rgba32float, read_write>;
+// Single 2D array texture: layers 0..N-1 = fast, N..2N-1 = slow.
+@group(1) @binding(0) var accum: texture_storage_2d_array<r32float, read_write>;
 
 fn get_emission_weight(band: u32) -> f32 {
     let vec_idx = band / 4u;
@@ -63,45 +55,6 @@ fn spot_profile(r_sq: f32) -> f32 {
     let inv_2_sigma_halo_sq = 0.5 / (params.sigma_halo * params.sigma_halo);
     return (1.0 - h) * exp(-r_sq * inv_2_sigma_core_sq)
          + h * exp(-r_sq * inv_2_sigma_halo_sq);
-}
-
-// Deposit energy into a single accumulation texture at the given texel.
-fn deposit_energy(tex_idx: u32, coord: vec2<i32>, energy: vec4<f32>) {
-    switch tex_idx {
-        case 0u: {
-            let prev = textureLoad(accum_0, coord);
-            textureStore(accum_0, coord, prev + energy);
-        }
-        case 1u: {
-            let prev = textureLoad(accum_1, coord);
-            textureStore(accum_1, coord, prev + energy);
-        }
-        case 2u: {
-            let prev = textureLoad(accum_2, coord);
-            textureStore(accum_2, coord, prev + energy);
-        }
-        case 3u: {
-            let prev = textureLoad(accum_3, coord);
-            textureStore(accum_3, coord, prev + energy);
-        }
-        case 4u: {
-            let prev = textureLoad(accum_4, coord);
-            textureStore(accum_4, coord, prev + energy);
-        }
-        case 5u: {
-            let prev = textureLoad(accum_5, coord);
-            textureStore(accum_5, coord, prev + energy);
-        }
-        case 6u: {
-            let prev = textureLoad(accum_6, coord);
-            textureStore(accum_6, coord, prev + energy);
-        }
-        case 7u: {
-            let prev = textureLoad(accum_7, coord);
-            textureStore(accum_7, coord, prev + energy);
-        }
-        default: {}
-    }
 }
 
 // Each workgroup handles one beam sample. Threads tile the spot footprint.
@@ -138,6 +91,9 @@ fn main(
     // If the spot is larger than 16x16, we need to loop over tiles
     let steps = i32(ceil(f32(2 * radius_i + 1) / f32(tile_size)));
 
+    let a_fast = emission.fast_fraction;
+    let a_slow = 1.0 - a_fast;
+
     for (var ty = 0; ty < steps; ty++) {
         for (var tx = 0; tx < steps; tx++) {
             let px_offset_x = ox + tx * tile_size;
@@ -165,23 +121,19 @@ fn main(
             let base_energy = sample.intensity * profile * sample.dt;
 
             let coord = vec2<i32>(px_x, px_y);
-            let a_fast = emission.fast_fraction;
-            let a_slow = 1.0 - a_fast;
 
-            // Deposit into each spectral band texture (4 bands per texture)
-            for (var tex = 0u; tex < 4u; tex++) {
-                let b0 = tex * 4u;
-                let e = vec4<f32>(
-                    base_energy * get_emission_weight(b0),
-                    base_energy * get_emission_weight(b0 + 1u),
-                    base_energy * get_emission_weight(b0 + 2u),
-                    base_energy * get_emission_weight(b0 + 3u),
-                );
+            // Deposit into each spectral band layer
+            for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+                let energy = base_energy * get_emission_weight(band);
 
-                // Fast decay textures: indices 0..3
-                deposit_energy(tex, coord, e * a_fast);
-                // Slow decay textures: indices 4..7
-                deposit_energy(tex + 4u, coord, e * a_slow);
+                // Fast decay layer
+                let prev_fast = textureLoad(accum, coord, band).r;
+                textureStore(accum, coord, band, vec4<f32>(prev_fast + energy * a_fast, 0.0, 0.0, 0.0));
+
+                // Slow decay layer
+                let slow_layer = SPECTRAL_BANDS + band;
+                let prev_slow = textureLoad(accum, coord, slow_layer).r;
+                textureStore(accum, coord, slow_layer, vec4<f32>(prev_slow + energy * a_slow, 0.0, 0.0, 0.0));
             }
         }
     }

@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+use super::SPECTRAL_CONSTANTS;
 use super::accumulation::AccumulationBuffer;
 
 #[repr(C)]
@@ -59,18 +60,16 @@ impl DecayPipeline {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("decay_textures"),
-                entries: &(0..8)
-                    .map(|i| wgpu::BindGroupLayoutEntry {
-                        binding: i,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadWrite,
-                            format: wgpu::TextureFormat::Rgba32Float,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    })
-                    .collect::<Vec<_>>(),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::ReadWrite,
+                        format: wgpu::TextureFormat::R32Float,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                    },
+                    count: None,
+                }],
             });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -84,7 +83,10 @@ impl DecayPipeline {
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: SPECTRAL_CONSTANTS,
+                ..Default::default()
+            },
             cache: None,
         });
 
@@ -120,16 +122,10 @@ impl DecayPipeline {
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("decay_textures"),
             layout: &self.texture_bind_group_layout,
-            entries: &accum
-                .views
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(i, view)| wgpu::BindGroupEntry {
-                    binding: i as u32,
-                    resource: wgpu::BindingResource::TextureView(view),
-                })
-                .collect::<Vec<_>>(),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&accum.view),
+            }],
         });
 
         let workgroups_x = (accum.width + 15) / 16;

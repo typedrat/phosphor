@@ -1,63 +1,52 @@
 use phosphor_data::spectral::SPECTRAL_BANDS;
 
-/// Number of RGBA32Float textures needed per decay component (fast or slow).
-/// Each texture holds 4 spectral bands in its RGBA channels.
-pub const TEXTURES_PER_COMPONENT: usize = (SPECTRAL_BANDS + 3) / 4;
+/// Array layers per decay component (fast or slow): one layer per spectral band.
+pub const LAYERS_PER_COMPONENT: u32 = SPECTRAL_BANDS as u32;
 
-/// Textures per phosphor layer (fluorescence or phosphorescence):
-/// one set for fast decay + one set for slow decay.
-pub const TEXTURES_PER_LAYER: usize = TEXTURES_PER_COMPONENT * 2;
-
-/// Maximum textures for a dual-layer phosphor (fluorescence + phosphorescence).
-pub const MAX_TEXTURES: usize = TEXTURES_PER_LAYER * 2;
+/// Total array layers for a single phosphor layer (fast + slow decay).
+pub const LAYERS_PER_DECAY_PAIR: u32 = LAYERS_PER_COMPONENT * 2;
 
 pub struct AccumulationBuffer {
-    pub textures: Vec<wgpu::Texture>,
-    pub views: Vec<wgpu::TextureView>,
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    pub layers: u32,
 }
 
 impl AccumulationBuffer {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, layer_count: usize) -> Self {
-        let texture_count = TEXTURES_PER_LAYER * layer_count;
+    pub fn new(device: &wgpu::Device, width: u32, height: u32, phosphor_layers: u32) -> Self {
+        let layers = LAYERS_PER_DECAY_PAIR * phosphor_layers;
 
-        let textures: Vec<wgpu::Texture> = (0..texture_count)
-            .map(|i| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("accumulation_{i}")),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba32Float,
-                    usage: wgpu::TextureUsages::STORAGE_BINDING
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-            })
-            .collect();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("accumulation"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
 
-        let views: Vec<wgpu::TextureView> = textures
-            .iter()
-            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
-            .collect();
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let vram_bytes = texture_count as u64 * width as u64 * height as u64 * 16; // 4 × f32
+        let vram_bytes = layers as u64 * width as u64 * height as u64 * 4; // 1 × f32
         log::info!(
-            "Accumulation buffer: {texture_count} textures, {width}x{height}, {:.1} MB VRAM",
+            "Accumulation buffer: {layers} R32Float layers, {width}x{height}, {:.1} MB VRAM",
             vram_bytes as f64 / (1024.0 * 1024.0)
         );
 
         Self {
-            textures,
-            views,
+            texture,
+            view,
             width,
             height,
+            layers,
         }
     }
 
@@ -65,8 +54,8 @@ impl AccumulationBuffer {
         if width == self.width && height == self.height {
             return;
         }
-        let layer_count = self.textures.len() / TEXTURES_PER_LAYER;
-        *self = Self::new(device, width, height, layer_count);
+        let phosphor_layers = self.layers / LAYERS_PER_DECAY_PAIR;
+        *self = Self::new(device, width, height, phosphor_layers);
     }
 }
 
@@ -75,9 +64,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn texture_count_matches_bands() {
-        assert_eq!(TEXTURES_PER_COMPONENT, 4); // 16 bands / 4 channels
-        assert_eq!(TEXTURES_PER_LAYER, 8); // 4 * 2 components
-        assert_eq!(MAX_TEXTURES, 16); // 8 * 2 layers
+    fn layer_counts_match_bands() {
+        assert_eq!(LAYERS_PER_COMPONENT, 16);
+        assert_eq!(LAYERS_PER_DECAY_PAIR, 32);
     }
 }

@@ -6,10 +6,14 @@ pub mod tonemap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use phosphor_data::spectral::SPECTRAL_BANDS;
+
 use winit::window::Window;
 
 use crate::beam::BeamSample;
 use crate::ui::EguiRenderOutput;
+
+const SPECTRAL_CONSTANTS: &[(&str, f64)] = &[("SPECTRAL_BANDS", SPECTRAL_BANDS as f64)];
 
 use self::accumulation::AccumulationBuffer;
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
