@@ -17,10 +17,10 @@ pub fn gaussian_emission_weights(peak_nm: f32, fwhm_nm: f32) -> [f32; SPECTRAL_B
     let sigma = fwhm_nm / 2.355;
     let mut weights = [0.0f32; SPECTRAL_BANDS];
 
-    for i in 0..SPECTRAL_BANDS {
+    for (i, w) in weights.iter_mut().enumerate().take(SPECTRAL_BANDS) {
         let center = band_center(i);
         let d = (center - peak_nm) / sigma;
-        weights[i] = (-0.5 * d * d).exp();
+        *w = (-0.5 * d * d).exp();
     }
 
     let sum: f32 = weights.iter().sum();
