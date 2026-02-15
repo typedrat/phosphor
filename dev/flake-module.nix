@@ -48,6 +48,7 @@
         gitlint
       ];
 
+      RUST_SRC_PATH = "${pkgs.fenix.stable.rust-src}/lib/rustlib/src/rust/library";
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
 
       shellHook = ''

@@ -2,10 +2,18 @@
   perSystem = {system, ...}: let
     pkgs = import inputs.nixpkgs {
       inherit system;
-      overlays = [(import inputs.rust-overlay)];
+      overlays = [inputs.fenix.overlays.default];
     };
 
-    rustToolchain = pkgs.rust-bin.stable.latest.default;
+    toolchain = pkgs.fenix.stable;
+    rustToolchain = toolchain.withComponents [
+      "cargo"
+      "clippy"
+      "rustc"
+      "rustfmt"
+      "rust-analyzer"
+      "rust-src"
+    ];
     craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
     runtimeLibs = with pkgs; [

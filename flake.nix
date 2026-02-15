@@ -5,8 +5,8 @@
     nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1";
     flake-parts.url = "https://flakehub.com/f/hercules-ci/flake-parts/0.1";
     crane.url = "https://flakehub.com/f/ipetkov/crane/*";
-    rust-overlay = {
-      url = "https://flakehub.com/f/oxalica/rust-overlay/0.1";
+    fenix = {
+      url = "https://flakehub.com/f/nix-community/fenix/0.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
