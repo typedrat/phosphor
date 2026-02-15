@@ -1,7 +1,8 @@
 pub mod accumulation;
 pub mod beam_write;
+pub mod composite;
 pub mod decay;
-pub mod tonemap;
+pub mod spectral_resolve;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,10 +16,11 @@ use crate::ui::EguiRenderOutput;
 
 const SPECTRAL_CONSTANTS: &[(&str, f64)] = &[("SPECTRAL_BANDS", SPECTRAL_BANDS as f64)];
 
-use self::accumulation::AccumulationBuffer;
+use self::accumulation::{AccumulationBuffer, HdrBuffer};
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
+use self::composite::{CompositeParams, CompositePipeline, TonemapMode};
 use self::decay::{DecayParams, DecayPipeline};
-use self::tonemap::{TonemapMode, TonemapParams, TonemapPipeline};
+use self::spectral_resolve::{SpectralResolveParams, SpectralResolvePipeline};
 
 pub struct GpuState {
     pub device: wgpu::Device,
@@ -26,14 +28,19 @@ pub struct GpuState {
     pub surface: wgpu::Surface<'static>,
     pub surface_config: wgpu::SurfaceConfiguration,
     pub accum: AccumulationBuffer,
+    pub hdr: HdrBuffer,
     pub beam_write: BeamWritePipeline,
     pub beam_params: BeamParams,
     pub emission_params: EmissionParams,
     pub decay: DecayPipeline,
     pub decay_params: DecayParams,
-    pub tonemap: TonemapPipeline,
-    pub tonemap_params: TonemapParams,
+    pub spectral_resolve: SpectralResolvePipeline,
+    pub spectral_resolve_params: SpectralResolveParams,
+    pub composite: CompositePipeline,
+    pub composite_params: CompositeParams,
     pub egui_renderer: egui_wgpu::Renderer,
+    /// Whether the swapchain surface supports HDR output.
+    pub hdr_output: bool,
     last_frame: Instant,
 }
 
@@ -65,12 +72,27 @@ impl GpuState {
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
-        let format = surface_caps
+
+        // Prefer HDR surface format (Rgba16Float) when the display supports it,
+        // falling back to sRGB for standard displays.
+        let hdr_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
+            .find(|f| **f == wgpu::TextureFormat::Rgba16Float)
+            .copied();
+        let (format, hdr_output) = if let Some(fmt) = hdr_format {
+            log::info!("HDR surface format available: {fmt:?}");
+            (fmt, true)
+        } else {
+            let srgb = surface_caps
+                .formats
+                .iter()
+                .find(|f| f.is_srgb())
+                .copied()
+                .unwrap_or(surface_caps.formats[0]);
+            log::info!("SDR surface format: {srgb:?}");
+            (srgb, false)
+        };
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -107,8 +129,18 @@ impl GpuState {
         // Default P1 green phosphor decay — ~12ms fast, ~40ms slow
         let decay_params = DecayParams::new(0.012, 0.040);
 
-        let tonemap = TonemapPipeline::new(&device, format);
-        let tonemap_params = TonemapParams::new(1.0, TonemapMode::default());
+        let hdr = HdrBuffer::new(&device, surface_config.width, surface_config.height);
+
+        let spectral_resolve = SpectralResolvePipeline::new(&device);
+        let spectral_resolve_params = SpectralResolveParams::new();
+
+        let composite = CompositePipeline::new(&device, format);
+        let tonemap_mode = if hdr_output {
+            TonemapMode::None
+        } else {
+            TonemapMode::default()
+        };
+        let composite_params = CompositeParams::new(1.0, tonemap_mode);
 
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
 
@@ -118,14 +150,18 @@ impl GpuState {
             surface,
             surface_config,
             accum,
+            hdr,
             beam_write,
             beam_params,
             emission_params,
             decay,
             decay_params,
-            tonemap,
-            tonemap_params,
+            spectral_resolve,
+            spectral_resolve_params,
+            composite,
+            composite_params,
             egui_renderer,
+            hdr_output,
             last_frame: Instant::now(),
         }
     }
@@ -136,6 +172,7 @@ impl GpuState {
             self.surface_config.height = height;
             self.surface.configure(&self.device, &self.surface_config);
             self.accum.resize(&self.device, width, height);
+            self.hdr.resize(&self.device, width, height);
             self.beam_params.width = width;
             self.beam_params.height = height;
         }
@@ -180,13 +217,22 @@ impl GpuState {
         self.decay
             .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
 
-        // Tonemap pass: spectral accumulation → sRGB display
-        self.tonemap.render(
+        // Spectral resolve pass: accumulation textures → HDR texture
+        self.spectral_resolve.render(
+            &self.device,
+            &mut encoder,
+            &self.hdr,
+            &self.spectral_resolve_params,
+            &self.accum,
+        );
+
+        // Composite pass: HDR texture → sRGB display
+        self.composite.render(
             &self.device,
             &mut encoder,
             &view,
-            &self.tonemap_params,
-            &self.accum,
+            &self.composite_params,
+            &self.hdr,
         );
 
         // egui overlay pass

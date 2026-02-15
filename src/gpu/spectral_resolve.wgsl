@@ -1,31 +1,21 @@
-// Tonemap / Display Fragment Shader
+// Spectral Resolve Fragment Shader
 //
-// Full-screen triangle that reads the accumulation texture array, integrates
-// spectral energy to CIE XYZ, converts to sRGB, and tonemaps for display.
-// Bloom, glass tint, and curvature are added in later tasks.
+// Stage 1 of the display pipeline. Reads the spectral accumulation texture
+// array, integrates energy per band against CIE 1931 color matching functions
+// to produce XYZ tristimulus values, converts to linear sRGB, and applies
+// gamut mapping. Outputs unbounded linear HDR RGB to an intermediate texture.
 
 override SPECTRAL_BANDS: u32 = 16u;
 
-// Tonemap modes (selected via params.tonemap_mode)
-alias TonemapMode = u32;
-
-const TONEMAP_REINHARD: TonemapMode = 0u;
-const TONEMAP_ACES: TonemapMode = 1u;
-const TONEMAP_CLAMP: TonemapMode = 2u;
-
-struct TonemapParams {
+struct SpectralResolveParams {
     // CIE 1931 color matching function weights per spectral band,
     // packed as 4 vec4s per channel (4 bands per vec4).
     cie_x: array<vec4<f32>, 4>,
     cie_y: array<vec4<f32>, 4>,
     cie_z: array<vec4<f32>, 4>,
-    exposure: f32,
-    tonemap_mode: TonemapMode,
-    _pad1: f32,
-    _pad2: f32,
 }
 
-@group(0) @binding(0) var<uniform> params: TonemapParams;
+@group(0) @binding(0) var<uniform> params: SpectralResolveParams;
 
 // Accumulation texture array bound as sampled texture for reading.
 @group(1) @binding(0) var accum: texture_2d_array<f32>;
@@ -70,44 +60,6 @@ fn gamut_map(rgb: vec3<f32>, luminance: f32) -> vec3<f32> {
     return mix(vec3<f32>(luminance), rgb, t);
 }
 
-// Reinhard: L / (1 + L), applied to CIE Y luminance, preserving hue.
-fn tonemap_reinhard(rgb: vec3<f32>, luminance: f32) -> vec3<f32> {
-    if luminance <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-    let mapped = luminance / (1.0 + luminance);
-    return rgb * (mapped / luminance);
-}
-
-// ACES filmic approximation (Narkowicz 2015), applied per-channel.
-fn tonemap_aces(rgb: vec3<f32>) -> vec3<f32> {
-    let v = rgb;
-    return clamp(
-        (v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14),
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-}
-
-// Linear clamp — no compression, just saturate to [0, 1].
-fn tonemap_clamp(rgb: vec3<f32>) -> vec3<f32> {
-    return clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-fn apply_tonemap(rgb: vec3<f32>, luminance: f32, mode: TonemapMode) -> vec3<f32> {
-    switch mode {
-        case TONEMAP_ACES: {
-            return tonemap_aces(rgb);
-        }
-        case TONEMAP_CLAMP: {
-            return tonemap_clamp(rgb);
-        }
-        default: {
-            return tonemap_reinhard(rgb, luminance);
-        }
-    }
-}
-
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(in.position.xy);
@@ -127,7 +79,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         Z += energy * get_cie_weight(2u, band);
     }
 
-    // XYZ → linear sRGB (IEC 61966-2-1)
+    // XYZ -> linear sRGB (IEC 61966-2-1)
     var rgb = vec3<f32>(
          3.2406 * X - 1.5372 * Y - 0.4986 * Z,
         -0.9689 * X + 1.8758 * Y + 0.0415 * Z,
@@ -137,13 +89,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Gamut mapping for phosphor colors outside sRGB
     rgb = gamut_map(rgb, Y);
 
-    // Exposure
-    rgb *= params.exposure;
-    let luminance = Y * params.exposure;
-
-    // Tonemapping (mode selected via uniform)
-    rgb = apply_tonemap(rgb, luminance, params.tonemap_mode);
-
-    // Output linear RGB — the sRGB render target applies gamma encoding
-    return vec4<f32>(rgb, 1.0);
+    // Output unbounded linear HDR RGB + luminance in alpha for downstream passes
+    return vec4<f32>(rgb, Y);
 }

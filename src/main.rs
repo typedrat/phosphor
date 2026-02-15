@@ -90,7 +90,7 @@ impl ApplicationHandler for App {
                     &phosphor.fluorescence.emission_weights,
                     phosphor.fluorescence.a_fast,
                 );
-                gpu.tonemap_params.exposure = ui.intensity;
+                gpu.composite_params.exposure = ui.intensity;
 
                 // Run egui frame
                 let egui_output = ui.run(&window);

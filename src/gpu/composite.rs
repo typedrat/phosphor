@@ -1,10 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-use crate::phosphor::spectral::CIE_INTEGRATION_WEIGHTS;
-
-use super::SPECTRAL_CONSTANTS;
-use super::accumulation::AccumulationBuffer;
+use super::accumulation::HdrBuffer;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u32)]
@@ -13,39 +10,23 @@ pub enum TonemapMode {
     Reinhard = 0,
     Aces = 1,
     Clamp = 2,
+    /// HDR passthrough — applies exposure only, no tonemapping compression.
+    /// Use when the swapchain surface is an HDR format (e.g. Rgba16Float).
+    None = 3,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-pub struct TonemapParams {
-    /// CIE x_bar weights packed as 4 vec4s (4 bands per vec4, matching texture RGBA).
-    cie_x: [[f32; 4]; 4],
-    /// CIE y_bar weights.
-    cie_y: [[f32; 4]; 4],
-    /// CIE z_bar weights.
-    cie_z: [[f32; 4]; 4],
+pub struct CompositeParams {
     pub exposure: f32,
     tonemap_mode: u32,
     _pad1: f32,
     _pad2: f32,
 }
 
-impl TonemapParams {
+impl CompositeParams {
     pub fn new(exposure: f32, mode: TonemapMode) -> Self {
-        let mut cie_x = [[0.0f32; 4]; 4];
-        let mut cie_y = [[0.0f32; 4]; 4];
-        let mut cie_z = [[0.0f32; 4]; 4];
-
-        for (i, &(x, y, z)) in CIE_INTEGRATION_WEIGHTS.iter().enumerate() {
-            cie_x[i / 4][i % 4] = x;
-            cie_y[i / 4][i % 4] = y;
-            cie_z[i / 4][i % 4] = z;
-        }
-
         Self {
-            cie_x,
-            cie_y,
-            cie_z,
             exposure,
             tonemap_mode: mode as u32,
             _pad1: 0.0,
@@ -61,27 +42,28 @@ impl TonemapParams {
         match self.tonemap_mode {
             1 => TonemapMode::Aces,
             2 => TonemapMode::Clamp,
+            3 => TonemapMode::None,
             _ => TonemapMode::Reinhard,
         }
     }
 }
 
-pub struct TonemapPipeline {
+pub struct CompositePipeline {
     pipeline: wgpu::RenderPipeline,
     params_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl TonemapPipeline {
+impl CompositePipeline {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("tonemap"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("tonemap.wgsl").into()),
+            label: Some("composite"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
         });
 
         let params_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("tonemap_params"),
+                label: Some("composite_params"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -96,13 +78,13 @@ impl TonemapPipeline {
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("tonemap_textures"),
+                label: Some("composite_hdr_texture"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
@@ -110,21 +92,18 @@ impl TonemapPipeline {
             });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("tonemap"),
+            label: Some("composite"),
             bind_group_layouts: &[&params_bind_group_layout, &texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("tonemap"),
+            label: Some("composite"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: SPECTRAL_CONSTANTS,
-                    ..Default::default()
-                },
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState {
@@ -136,10 +115,7 @@ impl TonemapPipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: SPECTRAL_CONSTANTS,
-                    ..Default::default()
-                },
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: None,
@@ -162,17 +138,17 @@ impl TonemapPipeline {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
-        params: &TonemapParams,
-        accum: &AccumulationBuffer,
+        params: &CompositeParams,
+        hdr: &HdrBuffer,
     ) {
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("tonemap_params"),
+            label: Some("composite_params"),
             contents: bytemuck::bytes_of(params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let params_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tonemap_params"),
+            label: Some("composite_params"),
             layout: &self.params_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -181,16 +157,16 @@ impl TonemapPipeline {
         });
 
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tonemap_textures"),
+            label: Some("composite_hdr_texture"),
             layout: &self.texture_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&accum.view),
+                resource: wgpu::BindingResource::TextureView(&hdr.view),
             }],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("tonemap"),
+            label: Some("composite"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,

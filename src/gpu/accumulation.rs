@@ -7,7 +7,10 @@ pub const LAYERS_PER_COMPONENT: u32 = SPECTRAL_BANDS as u32;
 pub const LAYERS_PER_DECAY_PAIR: u32 = LAYERS_PER_COMPONENT * 2;
 
 pub struct AccumulationBuffer {
+    // Kept alive for its view.
+    #[allow(dead_code)]
     pub texture: wgpu::Texture,
+
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
@@ -56,6 +59,53 @@ impl AccumulationBuffer {
         }
         let phosphor_layers = self.layers / LAYERS_PER_DECAY_PAIR;
         *self = Self::new(device, width, height, phosphor_layers);
+    }
+}
+
+/// Intermediate HDR texture between spectral resolve and composite passes.
+/// Stores linear sRGB in Rgba32Float, same resolution as the accumulation buffer.
+pub struct HdrBuffer {
+    // Kept alive for its view.
+    #[allow(dead_code)]
+    pub texture: wgpu::Texture,
+
+    pub view: wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl HdrBuffer {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr_buffer"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        Self {
+            texture,
+            view,
+            width,
+            height,
+        }
+    }
+
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if width == self.width && height == self.height {
+            return;
+        }
+        *self = Self::new(device, width, height);
     }
 }
 
