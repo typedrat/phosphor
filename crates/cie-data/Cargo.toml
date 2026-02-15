@@ -1,0 +1,11 @@
+[package]
+name = "cie-data"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+csv = "1"
+syn = "2"
