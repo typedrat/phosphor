@@ -1,7 +1,7 @@
 // Faceplate Scatter Downsample Shader
 //
 // 2x downsample of the HDR texture with brightness threshold.
-// Uses textureLoad (Rgba32Float is not filterable without a feature flag).
+// Hardware bilinear sampling at 2x2 block centers gives a free box filter.
 
 struct DownsampleParams {
     threshold: f32,
@@ -12,6 +12,7 @@ struct DownsampleParams {
 
 @group(0) @binding(0) var<uniform> params: DownsampleParams;
 @group(1) @binding(0) var hdr_texture: texture_2d<f32>;
+@group(1) @binding(1) var hdr_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -28,16 +29,11 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Each output texel corresponds to a 2x2 block in the source
-    let dst_coord = vec2<i32>(in.position.xy);
-    let src_base = dst_coord * 2;
-
-    // Manual 2x2 average
-    let s00 = textureLoad(hdr_texture, src_base + vec2<i32>(0, 0), 0);
-    let s10 = textureLoad(hdr_texture, src_base + vec2<i32>(1, 0), 0);
-    let s01 = textureLoad(hdr_texture, src_base + vec2<i32>(0, 1), 0);
-    let s11 = textureLoad(hdr_texture, src_base + vec2<i32>(1, 1), 0);
-    let avg = (s00 + s10 + s01 + s11) * 0.25;
+    // Each output texel corresponds to a 2x2 block in the source.
+    // Sample at block center — bilinear filter averages the 4 texels.
+    let src_size = vec2<f32>(textureDimensions(hdr_texture));
+    let uv = in.position.xy / src_size * 2.0;
+    let avg = textureSample(hdr_texture, hdr_sampler, uv);
 
     let rgb = avg.rgb;
     let luminance = avg.a; // CIE Y from spectral resolve

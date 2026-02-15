@@ -92,6 +92,9 @@ impl ApplicationHandler for App {
                 );
                 gpu.composite_params.exposure = ui.intensity;
                 gpu.composite_params.faceplate_scatter_intensity = ui.faceplate_scatter_intensity;
+                gpu.composite_params.glass_tint = ui.glass_tint;
+                gpu.composite_params.curvature = ui.curvature;
+                gpu.composite_params.edge_falloff = ui.edge_falloff;
 
                 // Run egui frame
                 let egui_output = ui.run(&window);

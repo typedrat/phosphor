@@ -22,16 +22,20 @@ pub struct CompositeParams {
     pub exposure: f32,
     tonemap_mode: u32,
     pub faceplate_scatter_intensity: f32,
-    _pad: f32,
+    pub curvature: f32,
+    pub glass_tint: [f32; 3],
+    pub edge_falloff: f32,
 }
 
 impl CompositeParams {
-    pub fn new(exposure: f32, mode: TonemapMode, faceplate_scatter_intensity: f32) -> Self {
+    pub fn new(exposure: f32, mode: TonemapMode) -> Self {
         Self {
             exposure,
             tonemap_mode: mode as u32,
-            faceplate_scatter_intensity,
-            _pad: 0.0,
+            faceplate_scatter_intensity: 0.15,
+            curvature: 0.0,
+            glass_tint: [0.92, 0.95, 0.92],
+            edge_falloff: 0.0,
         }
     }
 
@@ -54,6 +58,7 @@ pub struct CompositePipeline {
     params_bind_group_layout: wgpu::BindGroupLayout,
     hdr_bind_group_layout: wgpu::BindGroupLayout,
     faceplate_scatter_bind_group_layout: wgpu::BindGroupLayout,
+    linear_sampler: wgpu::Sampler,
 }
 
 impl CompositePipeline {
@@ -78,35 +83,42 @@ impl CompositePipeline {
                 }],
             });
 
-        let hdr_bind_group_layout =
+        let texture_and_sampler_entries = |label| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("composite_hdr_texture"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                label: Some(label),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
-            });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            })
+        };
 
+        let hdr_bind_group_layout = texture_and_sampler_entries("composite_hdr");
         let faceplate_scatter_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("composite_faceplate_scatter_texture"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                }],
-            });
+            texture_and_sampler_entries("composite_faceplate_scatter");
+
+        let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("composite_linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("composite"),
@@ -152,6 +164,7 @@ impl CompositePipeline {
             params_bind_group_layout,
             hdr_bind_group_layout,
             faceplate_scatter_bind_group_layout,
+            linear_sampler,
         }
     }
 
@@ -180,22 +193,34 @@ impl CompositePipeline {
         });
 
         let hdr_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("composite_hdr_texture"),
+            label: Some("composite_hdr"),
             layout: &self.hdr_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&hdr.view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&hdr.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+                },
+            ],
         });
 
-        // FaceplateScatter result is in view_a after the blur passes
+        // Faceplate scatter result is in view_a after the blur passes
         let faceplate_scatter_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("composite_faceplate_scatter_texture"),
+            label: Some("composite_faceplate_scatter"),
             layout: &self.faceplate_scatter_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&faceplate_scatter.view_a),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&faceplate_scatter.view_a),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+                },
+            ],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

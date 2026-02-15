@@ -17,7 +17,9 @@ struct CompositeParams {
     exposure: f32,
     tonemap_mode: TonemapMode,
     faceplate_scatter_intensity: f32,
-    _pad: f32,
+    curvature: f32,
+    glass_tint: vec3<f32>,
+    edge_falloff: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -25,9 +27,11 @@ struct CompositeParams {
 // HDR texture from spectral resolve pass (linear sRGB, unbounded).
 // Alpha channel carries CIE Y luminance for luminance-based tonemapping.
 @group(1) @binding(0) var hdr_texture: texture_2d<f32>;
+@group(1) @binding(1) var hdr_sampler: sampler;
 
 // Faceplate scatter (blurred bright areas) at half resolution.
 @group(2) @binding(0) var faceplate_scatter_texture: texture_2d<f32>;
+@group(2) @binding(1) var scatter_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -85,18 +89,46 @@ fn apply_tonemap(rgb: vec3<f32>, luminance: f32, mode: TonemapMode) -> vec3<f32>
     }
 }
 
+// Barrel distortion: remap UV from screen center.
+// k = curvature strength (0 = flat, 0.1-0.5 = typical CRT range).
+fn barrel_distort(uv: vec2<f32>, k: f32) -> vec2<f32> {
+    let centered = uv - vec2<f32>(0.5);
+    let r2 = dot(centered, centered);
+    let scale = 1.0 + k * r2;
+    return centered * scale + vec2<f32>(0.5);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let coord = vec2<i32>(in.position.xy);
-    let hdr = textureLoad(hdr_texture, coord, 0);
+    let tex_size = vec2<f32>(textureDimensions(hdr_texture));
+    let uv = in.position.xy / tex_size;
+
+    // Screen curvature — remap UV through barrel distortion
+    let distorted_uv = barrel_distort(uv, params.curvature);
+
+    // Pixels outside the curved screen area render as black (bezel)
+    if distorted_uv.x < 0.0 || distorted_uv.x > 1.0 || distorted_uv.y < 0.0 || distorted_uv.y > 1.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+
+    // Bilinear-filtered sampling — smooth under curvature distortion
+    let hdr = textureSample(hdr_texture, hdr_sampler, distorted_uv);
 
     var rgb = hdr.rgb;
     let Y = hdr.a; // CIE Y luminance from spectral resolve
 
-    // Add faceplate_scatter (sampled at half resolution via nearest-neighbor)
-    let faceplate_scatter_coord = coord / 2;
-    let faceplate_scatter = textureLoad(faceplate_scatter_texture, faceplate_scatter_coord, 0).rgb;
-    rgb += faceplate_scatter * params.faceplate_scatter_intensity;
+    // Faceplate scatter — half-res texture, hardware bilinear upscale
+    let scatter = textureSample(faceplate_scatter_texture, scatter_sampler, distorted_uv).rgb;
+    rgb += scatter * params.faceplate_scatter_intensity;
+
+    // Glass faceplate tint — multiplicative color filter
+    rgb *= params.glass_tint;
+
+    // Edge darkening — cosine falloff from screen normal
+    let centered = distorted_uv - vec2<f32>(0.5);
+    let r2 = dot(centered, centered);
+    let edge_dim = mix(1.0, 1.0 - r2 * 4.0, params.edge_falloff);
+    rgb *= max(edge_dim, 0.0);
 
     // Exposure
     rgb *= params.exposure;

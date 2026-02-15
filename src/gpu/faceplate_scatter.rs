@@ -105,6 +105,7 @@ pub struct FaceplateScatterPipeline {
     blur_pipeline: wgpu::RenderPipeline,
     params_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
+    linear_sampler: wgpu::Sampler,
 }
 
 impl FaceplateScatterPipeline {
@@ -112,7 +113,7 @@ impl FaceplateScatterPipeline {
         let faceplate_scatter_format = wgpu::TextureFormat::Rgba16Float;
 
         // Shared bind group layouts — both passes use the same pattern:
-        // group(0) = uniform buffer, group(1) = texture
+        // group(0) = uniform buffer, group(1) = texture + sampler
         let params_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("faceplate_scatter_params"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -129,16 +130,33 @@ impl FaceplateScatterPipeline {
 
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("faceplate_scatter_texture"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("faceplate_scatter_linear"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -150,7 +168,9 @@ impl FaceplateScatterPipeline {
         // Downsample pipeline
         let downsample_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("faceplate_scatter_downsample"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("faceplate_scatter_downsample.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("faceplate_scatter_downsample.wgsl").into(),
+            ),
         });
 
         let downsample_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -222,6 +242,7 @@ impl FaceplateScatterPipeline {
             blur_pipeline,
             params_layout,
             texture_layout,
+            linear_sampler,
         }
     }
 
@@ -297,10 +318,16 @@ impl FaceplateScatterPipeline {
         let texture_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("faceplate_scatter_downsample_texture"),
             layout: &self.texture_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(src),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+                },
+            ],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -356,10 +383,16 @@ impl FaceplateScatterPipeline {
         let texture_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("faceplate_scatter_blur_texture"),
             layout: &self.texture_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(src),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.linear_sampler),
+                },
+            ],
         });
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

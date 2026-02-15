@@ -71,7 +71,7 @@ impl GpuState {
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("phosphor"),
-            required_features: wgpu::Features::empty(),
+            required_features: wgpu::Features::FLOAT32_FILTERABLE,
             required_limits: wgpu::Limits::default(),
             ..Default::default()
         }))
@@ -152,8 +152,7 @@ impl GpuState {
         } else {
             TonemapMode::default()
         };
-        let composite_params =
-            CompositeParams::new(1.0, tonemap_mode, faceplate_scatter_params.intensity);
+        let composite_params = CompositeParams::new(1.0, tonemap_mode);
 
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
 

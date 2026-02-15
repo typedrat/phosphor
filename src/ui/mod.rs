@@ -1,8 +1,16 @@
+pub mod engineer_panel;
 pub mod scope_panel;
 
 use winit::window::Window;
 
 use crate::phosphor::{PhosphorType, phosphor_database};
+
+#[derive(Default, PartialEq)]
+pub enum PanelTab {
+    #[default]
+    Scope,
+    Engineer,
+}
 
 pub struct EguiRenderOutput {
     pub primitives: Vec<egui::ClippedPrimitive>,
@@ -18,6 +26,10 @@ pub struct UiState {
     pub intensity: f32,
     pub focus: f32,
     pub faceplate_scatter_intensity: f32,
+    pub glass_tint: [f32; 3],
+    pub curvature: f32,
+    pub edge_falloff: f32,
+    tab: PanelTab,
 }
 
 impl UiState {
@@ -40,6 +52,10 @@ impl UiState {
             intensity: 1.0,
             focus: 1.5,
             faceplate_scatter_intensity: 0.15,
+            glass_tint: [0.92, 0.95, 0.92],
+            curvature: 0.0,
+            edge_falloff: 0.0,
+            tab: PanelTab::default(),
         }
     }
 
@@ -55,14 +71,32 @@ impl UiState {
         let raw_input = self.winit_state.take_egui_input(window);
 
         let full_output = self.ctx.run(raw_input, |ctx| {
-            scope_panel::scope_panel(
-                ctx,
-                &self.phosphors,
-                &mut self.phosphor_index,
-                &mut self.intensity,
-                &mut self.focus,
-                &mut self.faceplate_scatter_intensity,
-            );
+            egui::SidePanel::left("control_panel")
+                .default_width(220.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
+                        ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
+                    });
+                    ui.separator();
+
+                    match self.tab {
+                        PanelTab::Scope => scope_panel::scope_panel(
+                            ui,
+                            &self.phosphors,
+                            &mut self.phosphor_index,
+                            &mut self.intensity,
+                            &mut self.focus,
+                            &mut self.faceplate_scatter_intensity,
+                        ),
+                        PanelTab::Engineer => engineer_panel::engineer_panel(
+                            ui,
+                            &mut self.glass_tint,
+                            &mut self.curvature,
+                            &mut self.edge_falloff,
+                        ),
+                    }
+                });
         });
 
         self.winit_state
