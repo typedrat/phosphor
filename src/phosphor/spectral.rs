@@ -1,27 +1,10 @@
-/// Number of spectral bands across the visible spectrum.
-/// Changing this value propagates through the entire pipeline.
-pub const SPECTRAL_BANDS: usize = 16;
-
-/// Visible spectrum range in nanometers.
-pub const WAVELENGTH_MIN: f32 = 380.0;
-pub const WAVELENGTH_MAX: f32 = 780.0;
-pub const BAND_WIDTH: f32 = (WAVELENGTH_MAX - WAVELENGTH_MIN) / SPECTRAL_BANDS as f32;
-
-/// Returns the (min, max) wavelength range in nm for a given band index.
-pub fn band_range(band: usize) -> (f32, f32) {
-    let min = WAVELENGTH_MIN + band as f32 * BAND_WIDTH;
-    let max = min + BAND_WIDTH;
-    (min, max)
-}
-
-/// Returns the center wavelength in nm for a given band index.
-pub fn band_center(band: usize) -> f32 {
-    let (min, max) = band_range(band);
-    (min + max) / 2.0
-}
+pub use phosphor_data::spectral::{
+    BAND_WIDTH, SPECTRAL_BANDS, WAVELENGTH_MAX, WAVELENGTH_MIN, band_center, band_range,
+    gaussian_emission_weights,
+};
 
 /// CIE 1931 2-degree standard observer color matching functions.
-/// 1nm steps, 360–830nm. Each entry: (wavelength_nm, x_bar, y_bar, z_bar).
+/// 1nm steps, 360-830nm. Each entry: (wavelength_nm, x_bar, y_bar, z_bar).
 ///
 /// Source: CIE 018:2019 (DOI: 10.25039/CIE.DS.xvudnb9b)
 const CIE_1931_DATA: [(f32, f64, f64, f64); 471] =
@@ -52,39 +35,12 @@ pub fn cie_integration_weights() -> [(f32, f32, f32); SPECTRAL_BANDS] {
         }
 
         if count > 0 {
-            // Average the CIE values within this band, then multiply by band width
-            // to get the integrated weight.
             let n = count as f64;
             weights[band] = (
                 (sum_x / n * BAND_WIDTH as f64) as f32,
                 (sum_y / n * BAND_WIDTH as f64) as f32,
                 (sum_z / n * BAND_WIDTH as f64) as f32,
             );
-        }
-    }
-
-    weights
-}
-
-/// Compute emission weights for a Gaussian emission peak.
-/// Returns normalized weights (sum = 1.0) across SPECTRAL_BANDS.
-///
-/// `peak_nm`: center wavelength of emission in nm
-/// `fwhm_nm`: full width at half maximum in nm
-pub fn gaussian_emission_weights(peak_nm: f32, fwhm_nm: f32) -> [f32; SPECTRAL_BANDS] {
-    let sigma = fwhm_nm / 2.355; // FWHM = 2*sqrt(2*ln2)*sigma ≈ 2.355*sigma
-    let mut weights = [0.0f32; SPECTRAL_BANDS];
-
-    for i in 0..SPECTRAL_BANDS {
-        let center = band_center(i);
-        let d = (center - peak_nm) / sigma;
-        weights[i] = (-0.5 * d * d).exp();
-    }
-
-    let sum: f32 = weights.iter().sum();
-    if sum > 0.0 {
-        for w in &mut weights {
-            *w /= sum;
         }
     }
 
@@ -130,7 +86,6 @@ mod tests {
 
     #[test]
     fn gaussian_weights_peak_at_correct_band() {
-        // 520nm should peak around band 5-6
         let weights = gaussian_emission_weights(520.0, 40.0);
         let peak_band = weights
             .iter()
@@ -152,7 +107,6 @@ mod tests {
             assert!(x.is_finite());
             assert!(y.is_finite());
             assert!(z.is_finite());
-            // Y (luminance) should be non-negative
             assert!(*y >= 0.0);
         }
     }

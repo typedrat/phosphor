@@ -1,0 +1,180 @@
+# Phosphor Database
+#
+# Source: Tektronix CRT Data Reference Tables (Rev A, 1966)
+#
+# Decay times are in seconds. Emission peaks are approximate Gaussian
+# profiles characterized by center wavelength and FWHM.
+#
+# For dual-layer phosphors (marked dual_layer = true), the [fluorescence]
+# and [phosphorescence] sub-tables define per-layer emission. For
+# single-layer phosphors, top-level peak_nm/fwhm_nm apply to both layers.
+
+# --- General Purpose ---
+
+[P1]
+category = "general_purpose"
+peak_nm = 520.0
+fwhm_nm = 40.0
+t_10pct = 0.027
+t_1pct = 0.060
+t_01pct = 0.095
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[P20]
+category = "general_purpose"
+peak_nm = 560.0
+fwhm_nm = 50.0
+t_10pct = 0.000230
+t_1pct = 0.002300
+t_01pct = 0.011000
+relative_luminance = 55.0
+relative_writing_speed = 85.0
+
+[P31]
+category = "general_purpose"
+peak_nm = 530.0
+fwhm_nm = 50.0
+t_10pct = 0.000340
+t_1pct = 0.004500
+t_01pct = 0.032000
+relative_luminance = 100.0
+relative_writing_speed = 100.0
+
+[P32]
+category = "general_purpose"
+peak_nm = 525.0
+fwhm_nm = 45.0
+t_10pct = 0.000350
+t_1pct = 0.004000
+t_01pct = 0.030000
+relative_luminance = 95.0
+relative_writing_speed = 90.0
+
+# --- Short Decay ---
+
+[P11]
+category = "short_decay"
+peak_nm = 450.0
+fwhm_nm = 25.0
+t_10pct = 0.000020
+t_1pct = 0.000080
+t_01pct = 0.000200
+relative_luminance = 15.0
+relative_writing_speed = 150.0
+
+[P15]
+category = "short_decay"
+peak_nm = 391.0
+fwhm_nm = 20.0
+t_10pct = 0.000002
+t_1pct = 0.000012
+t_01pct = 0.000050
+relative_luminance = 3.0
+relative_writing_speed = 250.0
+
+[P24]
+category = "short_decay"
+peak_nm = 510.0
+fwhm_nm = 35.0
+t_10pct = 0.000018
+t_1pct = 0.000137
+t_01pct = 0.000590
+relative_luminance = 25.0
+relative_writing_speed = 120.0
+
+# --- Video Display ---
+
+[P3]
+category = "video_display"
+peak_nm = 560.0
+fwhm_nm = 45.0
+t_10pct = 0.019
+t_1pct = 0.045
+t_01pct = 0.074
+relative_luminance = 50.0
+relative_writing_speed = 55.0
+
+[P4]
+category = "video_display"
+peak_nm = 555.0
+fwhm_nm = 60.0
+t_10pct = 0.000320
+t_1pct = 0.003300
+t_01pct = 0.020000
+relative_luminance = 70.0
+relative_writing_speed = 80.0
+
+# --- Long Decay (Sulfide) ---
+
+[P2]
+category = "long_decay_sulfide"
+dual_layer = true
+peak_nm = 510.0
+t_10pct = 0.000370
+t_1pct = 0.004700
+t_01pct = 0.051000
+relative_luminance = 60.0
+relative_writing_speed = 70.0
+
+[P2.fluorescence]
+peak_nm = 510.0
+fwhm_nm = 35.0
+
+[P2.phosphorescence]
+peak_nm = 560.0
+fwhm_nm = 50.0
+
+[P7]
+category = "long_decay_sulfide"
+dual_layer = true
+peak_nm = 450.0
+t_10pct = 0.000305
+t_1pct = 0.005700
+t_01pct = 0.066000
+relative_luminance = 35.0
+relative_writing_speed = 65.0
+
+[P7.fluorescence]
+peak_nm = 450.0
+fwhm_nm = 30.0
+
+[P7.phosphorescence]
+peak_nm = 530.0
+fwhm_nm = 50.0
+
+[P14]
+category = "long_decay_sulfide"
+dual_layer = true
+peak_nm = 460.0
+t_10pct = 0.000440
+t_1pct = 0.006700
+t_01pct = 0.055000
+relative_luminance = 40.0
+relative_writing_speed = 60.0
+
+[P14.fluorescence]
+peak_nm = 460.0
+fwhm_nm = 30.0
+
+[P14.phosphorescence]
+peak_nm = 545.0
+fwhm_nm = 50.0
+
+[P17]
+category = "long_decay_sulfide"
+dual_layer = true
+peak_nm = 450.0
+t_10pct = 0.000130
+t_1pct = 0.008700
+t_01pct = 0.082500
+relative_luminance = 30.0
+relative_writing_speed = 55.0
+
+[P17.fluorescence]
+peak_nm = 450.0
+fwhm_nm = 25.0
+
+[P17.phosphorescence]
+peak_nm = 530.0
+fwhm_nm = 50.0
