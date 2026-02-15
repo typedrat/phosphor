@@ -1,3 +1,5 @@
+pub mod oscilloscope;
+
 /// A single beam position sample.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
