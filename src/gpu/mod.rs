@@ -1,7 +1,9 @@
 pub mod accumulation;
 pub mod beam_write;
+pub mod decay;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use winit::window::Window;
 
@@ -9,6 +11,7 @@ use crate::beam::BeamSample;
 
 use self::accumulation::AccumulationBuffer;
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
+use self::decay::{DecayParams, DecayPipeline};
 
 pub struct GpuState {
     pub device: wgpu::Device,
@@ -19,6 +22,9 @@ pub struct GpuState {
     pub beam_write: BeamWritePipeline,
     pub beam_params: BeamParams,
     pub emission_params: EmissionParams,
+    pub decay: DecayPipeline,
+    pub decay_params: DecayParams,
+    last_frame: Instant,
 }
 
 impl GpuState {
@@ -86,6 +92,11 @@ impl GpuState {
         // Default P1 green phosphor emission — uniform across bands for now
         let emission_params = EmissionParams::new(&[1.0 / 16.0; 16], 0.7);
 
+        let decay = DecayPipeline::new(&device);
+
+        // Default P1 green phosphor decay — ~12ms fast, ~40ms slow
+        let decay_params = DecayParams::new(0.012, 0.040);
+
         Self {
             device,
             queue,
@@ -95,6 +106,9 @@ impl GpuState {
             beam_write,
             beam_params,
             emission_params,
+            decay,
+            decay_params,
+            last_frame: Instant::now(),
         }
     }
 
@@ -110,6 +124,10 @@ impl GpuState {
     }
 
     pub fn render(&mut self, samples: &[BeamSample]) -> Result<(), wgpu::SurfaceError> {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame).as_secs_f32();
+        self.last_frame = now;
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -134,6 +152,11 @@ impl GpuState {
                 &self.accum,
             );
         }
+
+        // Decay pass
+        let decay_params = self.decay_params.with_dt(dt);
+        self.decay
+            .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
 
         // Clear and present (tonemap shader replaces this later)
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
