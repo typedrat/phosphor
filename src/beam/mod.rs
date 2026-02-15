@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod oscilloscope;
 
 /// A single beam position sample.
