@@ -42,6 +42,7 @@ fn format_phosphor(p: &phosphor_data::PhosphorType) -> String {
     format!(
         r#"phosphor_data::PhosphorType {{
         designation: String::from("{designation}"),
+        description: String::from("{description}"),
         category: {category},
         is_dual_layer: {dual},
         fluorescence: {fl},
@@ -51,6 +52,7 @@ fn format_phosphor(p: &phosphor_data::PhosphorType) -> String {
         relative_writing_speed: {ws}_f32,
     }}"#,
         designation = p.designation,
+        description = p.description,
         category = format_category(&p.category),
         dual = p.is_dual_layer,
         fl = format_layer(&p.fluorescence),

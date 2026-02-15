@@ -12,6 +12,7 @@
 # --- General Purpose ---
 
 [P1]
+description = "Medium persistence green. Standard general-purpose oscilloscope phosphor."
 category = "general_purpose"
 peak_nm = 520.0
 fwhm_nm = 40.0
@@ -22,6 +23,7 @@ relative_luminance = 50.0
 relative_writing_speed = 60.0
 
 [P20]
+description = "Medium persistence yellow-green. General-purpose oscilloscope and display."
 category = "general_purpose"
 peak_nm = 560.0
 fwhm_nm = 50.0
@@ -32,6 +34,7 @@ relative_luminance = 55.0
 relative_writing_speed = 85.0
 
 [P31]
+description = "Medium-short persistence green. Most common oscilloscope phosphor."
 category = "general_purpose"
 peak_nm = 530.0
 fwhm_nm = 50.0
@@ -42,6 +45,7 @@ relative_luminance = 100.0
 relative_writing_speed = 100.0
 
 [P32]
+description = "Medium-short persistence yellow-green. Similar to P31, slightly warmer."
 category = "general_purpose"
 peak_nm = 525.0
 fwhm_nm = 45.0
@@ -54,6 +58,7 @@ relative_writing_speed = 90.0
 # --- Short Decay ---
 
 [P11]
+description = "Short persistence blue. Photographic recording and high-speed displays."
 category = "short_decay"
 peak_nm = 450.0
 fwhm_nm = 25.0
@@ -64,6 +69,7 @@ relative_luminance = 15.0
 relative_writing_speed = 150.0
 
 [P15]
+description = "Very short persistence near-UV. Flying-spot scanners."
 category = "short_decay"
 peak_nm = 391.0
 fwhm_nm = 20.0
@@ -74,6 +80,7 @@ relative_luminance = 3.0
 relative_writing_speed = 250.0
 
 [P24]
+description = "Short persistence green. Flying-spot scanners and high-speed recording."
 category = "short_decay"
 peak_nm = 510.0
 fwhm_nm = 35.0
@@ -86,6 +93,7 @@ relative_writing_speed = 120.0
 # --- Video Display ---
 
 [P3]
+description = "Medium persistence amber. Standard phosphor for amber monochrome computer monitors."
 category = "video_display"
 peak_nm = 560.0
 fwhm_nm = 45.0
@@ -96,6 +104,7 @@ relative_luminance = 50.0
 relative_writing_speed = 55.0
 
 [P4]
+description = "Medium-short persistence white. Standard black-and-white television."
 category = "video_display"
 peak_nm = 555.0
 fwhm_nm = 60.0
@@ -108,6 +117,7 @@ relative_writing_speed = 80.0
 # --- Long Decay (Sulfide) ---
 
 [P2]
+description = "Dual-layer blue-green flash with yellow-green phosphorescence. Radar and oscilloscopes."
 category = "long_decay_sulfide"
 dual_layer = true
 peak_nm = 510.0
@@ -126,6 +136,7 @@ peak_nm = 560.0
 fwhm_nm = 50.0
 
 [P7]
+description = "Dual-layer blue flash with long persistence yellow-green. Radar PPI displays."
 category = "long_decay_sulfide"
 dual_layer = true
 peak_nm = 450.0
@@ -144,6 +155,7 @@ peak_nm = 530.0
 fwhm_nm = 50.0
 
 [P14]
+description = "Dual-layer blue-purple flash with orange phosphorescence. Radar displays."
 category = "long_decay_sulfide"
 dual_layer = true
 peak_nm = 460.0
@@ -162,6 +174,7 @@ peak_nm = 545.0
 fwhm_nm = 50.0
 
 [P17]
+description = "Dual-layer blue flash with yellow-green phosphorescence. Long-persistence radar."
 category = "long_decay_sulfide"
 dual_layer = true
 peak_nm = 450.0

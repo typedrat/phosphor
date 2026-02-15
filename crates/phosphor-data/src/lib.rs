@@ -29,6 +29,7 @@ pub struct PhosphorLayer {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhosphorType {
     pub designation: String,
+    pub description: String,
     pub category: PhosphorCategory,
     pub is_dual_layer: bool,
     pub fluorescence: PhosphorLayer,
@@ -48,6 +49,7 @@ struct LayerData {
 
 #[derive(Debug, Deserialize)]
 struct PhosphorData {
+    description: String,
     category: String,
     #[serde(default)]
     dual_layer: bool,
@@ -109,6 +111,7 @@ fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
 
     PhosphorType {
         designation: designation.to_string(),
+        description: data.description.clone(),
         category: parse_category(&data.category),
         is_dual_layer,
         fluorescence,
