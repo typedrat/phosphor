@@ -1,3 +1,4 @@
+mod beam;
 mod phosphor;
 
 fn main() {
