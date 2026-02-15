@@ -1,6 +1,7 @@
 pub mod accumulation;
 pub mod beam_write;
 pub mod decay;
+pub mod tonemap;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,6 +13,7 @@ use crate::beam::BeamSample;
 use self::accumulation::AccumulationBuffer;
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
 use self::decay::{DecayParams, DecayPipeline};
+use self::tonemap::{TonemapMode, TonemapParams, TonemapPipeline};
 
 pub struct GpuState {
     pub device: wgpu::Device,
@@ -24,6 +26,8 @@ pub struct GpuState {
     pub emission_params: EmissionParams,
     pub decay: DecayPipeline,
     pub decay_params: DecayParams,
+    pub tonemap: TonemapPipeline,
+    pub tonemap_params: TonemapParams,
     last_frame: Instant,
 }
 
@@ -97,6 +101,9 @@ impl GpuState {
         // Default P1 green phosphor decay — ~12ms fast, ~40ms slow
         let decay_params = DecayParams::new(0.012, 0.040);
 
+        let tonemap = TonemapPipeline::new(&device, format);
+        let tonemap_params = TonemapParams::new(1.0, TonemapMode::default());
+
         Self {
             device,
             queue,
@@ -108,6 +115,8 @@ impl GpuState {
             emission_params,
             decay,
             decay_params,
+            tonemap,
+            tonemap_params,
             last_frame: Instant::now(),
         }
     }
@@ -158,21 +167,14 @@ impl GpuState {
         self.decay
             .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
 
-        // Clear and present (tonemap shader replaces this later)
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
+        // Tonemap pass: spectral accumulation → sRGB display
+        self.tonemap.render(
+            &self.device,
+            &mut encoder,
+            &view,
+            &self.tonemap_params,
+            &self.accum,
+        );
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
