@@ -107,14 +107,14 @@ src/
 
 | Crate                               | Purpose                                       |
 | ----------------------------------- | --------------------------------------------- |
-| `winit` (0.31 beta)                 | Window management, event loop, multi-window   |
-| `wgpu` (28)                         | GPU compute and render pipelines              |
+| `winit` (0.30)                      | Window management, event loop, multi-window   |
+| `wgpu` (27)                         | GPU compute and render pipelines              |
 | `egui` + `egui-wgpu` + `egui-winit` | UI framework (manual integration, not eframe) |
 | `symphonia`                         | Audio file decoding (WAV, FLAC, OGG, MP3)     |
 | `glam`                              | Vector/matrix math                            |
 | `bytemuck`                          | Zero-copy GPU buffer casting                  |
 
-**Note:** We use individual egui/winit/wgpu components instead of eframe because eframe's transitive dependency on winit 0.30 doesn't compile on Rust 1.93+. The manual integration gives us full control over the wgpu pipeline anyway.
+**Note:** We use individual egui/winit/wgpu components instead of eframe. The manual integration gives us full control over the wgpu pipeline. egui 0.33 requires wgpu 27 and winit 0.30 — these versions must stay in sync.
 
 ## Conventions
 

@@ -9,6 +9,7 @@ use std::time::Instant;
 use winit::window::Window;
 
 use crate::beam::BeamSample;
+use crate::ui::EguiRenderOutput;
 
 use self::accumulation::AccumulationBuffer;
 use self::beam_write::{BeamParams, BeamWritePipeline, EmissionParams};
@@ -28,11 +29,12 @@ pub struct GpuState {
     pub decay_params: DecayParams,
     pub tonemap: TonemapPipeline,
     pub tonemap_params: TonemapParams,
+    pub egui_renderer: egui_wgpu::Renderer,
     last_frame: Instant,
 }
 
 impl GpuState {
-    pub fn new(window: Arc<dyn Window>) -> Self {
+    pub fn new(window: Arc<Window>) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -57,7 +59,7 @@ impl GpuState {
         }))
         .expect("failed to create GPU device");
 
-        let size = window.surface_size();
+        let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
         let format = surface_caps
             .formats
@@ -104,6 +106,8 @@ impl GpuState {
         let tonemap = TonemapPipeline::new(&device, format);
         let tonemap_params = TonemapParams::new(1.0, TonemapMode::default());
 
+        let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
+
         Self {
             device,
             queue,
@@ -117,6 +121,7 @@ impl GpuState {
             decay_params,
             tonemap,
             tonemap_params,
+            egui_renderer,
             last_frame: Instant::now(),
         }
     }
@@ -132,7 +137,11 @@ impl GpuState {
         }
     }
 
-    pub fn render(&mut self, samples: &[BeamSample]) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(
+        &mut self,
+        samples: &[BeamSample],
+        egui: Option<&EguiRenderOutput>,
+    ) -> Result<(), wgpu::SurfaceError> {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -176,9 +185,60 @@ impl GpuState {
             &self.accum,
         );
 
+        // egui overlay pass
+        if let Some(egui) = egui {
+            for (id, delta) in &egui.textures_delta.set {
+                self.egui_renderer
+                    .update_texture(&self.device, &self.queue, *id, delta);
+            }
+
+            self.egui_renderer.update_buffers(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &egui.primitives,
+                &egui.screen_descriptor,
+            );
+
+            render_egui_pass(&self.egui_renderer, &mut encoder, &view, egui);
+
+            for id in &egui.textures_delta.free {
+                self.egui_renderer.free_texture(id);
+            }
+        }
+
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         Ok(())
     }
+}
+
+/// Render egui overlay in a separate function to avoid lifetime conflicts
+/// between the encoder borrow (for the render pass) and the renderer borrow
+/// (through `self`) in wgpu 27 where `RenderPass` borrows the encoder.
+fn render_egui_pass(
+    renderer: &egui_wgpu::Renderer,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    egui: &EguiRenderOutput,
+) {
+    let mut rpass = encoder
+        .begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        })
+        .forget_lifetime();
+
+    renderer.render(&mut rpass, &egui.primitives, &egui.screen_descriptor);
 }

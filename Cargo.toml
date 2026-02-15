@@ -17,10 +17,10 @@ phosphor-data = { path = "crates/phosphor-data" }
 phosphor-data-macro = { path = "crates/phosphor-data-macro" }
 
 # Windowing
-winit = "0.31.0-beta.2"
+winit = "0.30"
 
 # GPU
-wgpu = "28"
+wgpu = "27"
 
 # UI
 egui = "0.33"
@@ -30,12 +30,9 @@ egui_extras = { version = "0.33", features = ["file"] }
 
 # Audio decoding (oscilloscope music input)
 symphonia = { version = "0.5", default-features = false, features = [
-    "wav",
-    "flac",
-    "ogg",
-    "vorbis",
-    "mp3",
-    "pcm",
+    "all-codecs",
+    "all-formats",
+    "opt-simd"
 ] }
 
 # Math
