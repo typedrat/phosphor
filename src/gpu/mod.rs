@@ -1,3 +1,5 @@
+pub mod accumulation;
+
 use std::sync::Arc;
 
 use winit::window::Window;
