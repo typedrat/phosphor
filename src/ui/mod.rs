@@ -51,8 +51,7 @@ impl UiState {
         );
 
         let phosphors = phosphor_database();
-        let mut engineer = EngineerState::default();
-        engineer.sync_from_phosphor(&phosphors[0]);
+        let engineer = EngineerState::default();
 
         Self {
             ctx,
@@ -134,13 +133,6 @@ impl UiState {
             }
         });
 
-        // Sync engineer params when phosphor selection changes
-        if self.phosphor_index != self.prev_phosphor_index {
-            self.engineer
-                .sync_from_phosphor(&self.phosphors[self.phosphor_index]);
-            self.prev_phosphor_index = self.phosphor_index;
-        }
-
         self.winit_state
             .handle_platform_output(window, full_output.platform_output);
 
@@ -201,12 +193,6 @@ impl UiState {
             });
         });
 
-        if self.phosphor_index != self.prev_phosphor_index {
-            self.engineer
-                .sync_from_phosphor(&self.phosphors[self.phosphor_index]);
-            self.prev_phosphor_index = self.phosphor_index;
-        }
-
         egui_winit.handle_platform_output(window, full_output.platform_output);
 
         let primitives = self
@@ -227,5 +213,15 @@ impl UiState {
 
     pub fn selected_phosphor(&self) -> &PhosphorType {
         &self.phosphors[self.phosphor_index]
+    }
+
+    /// Returns true once per phosphor selection change, consuming the event.
+    pub fn phosphor_changed(&mut self) -> bool {
+        if self.phosphor_index != self.prev_phosphor_index {
+            self.prev_phosphor_index = self.phosphor_index;
+            true
+        } else {
+            false
+        }
     }
 }

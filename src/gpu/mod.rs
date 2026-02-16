@@ -19,6 +19,7 @@ pub const TAU_CUTOFF: f32 = 1e-4; // 100 µs
 use winit::window::Window;
 
 use crate::beam::BeamSample;
+use crate::phosphor::PhosphorType;
 use crate::types::Resolution;
 use crate::ui::EguiRenderOutput;
 
@@ -249,6 +250,40 @@ impl GpuState {
             .resize(&self.device, resolution);
         self.beam_params.width = resolution.width;
         self.beam_params.height = resolution.height;
+    }
+
+    /// Reconfigure GPU state for a new phosphor type. Rebuilds decay params,
+    /// emission params, spectral resolve params, and reallocates the
+    /// accumulation buffer if the layer count changed.
+    pub fn switch_phosphor(&mut self, phosphor: &PhosphorType) {
+        let terms = &phosphor.fluorescence.decay_terms;
+        let class = phosphor_data::classify_decay_terms(terms, TAU_CUTOFF);
+        let layers = accumulation::accum_layer_count(
+            class.slow_exp_count,
+            class.has_power_law,
+            class.instant_exp_count > 0,
+        );
+
+        if layers != self.accum.layers {
+            self.accum =
+                AccumulationBuffer::new(&self.device, self.accum.resolution, layers.max(1));
+        } else {
+            // Zero the buffer even if same size — old phosphor's data is invalid
+            self.queue.write_buffer(
+                &self.accum.buffer,
+                0,
+                &vec![0u8; self.accum.buffer.size() as usize],
+            );
+        }
+
+        self.decay_params = DecayParams::from_terms(terms, TAU_CUTOFF);
+        self.emission_params = EmissionParams::from_phosphor(
+            &phosphor.fluorescence.emission_weights,
+            terms,
+            TAU_CUTOFF,
+        );
+        self.spectral_resolve_params
+            .update_from_phosphor(terms, TAU_CUTOFF);
     }
 
     pub fn render(

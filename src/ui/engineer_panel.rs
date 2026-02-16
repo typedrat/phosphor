@@ -12,10 +12,6 @@ pub struct EngineerState {
     pub halo_fraction: f32,
     pub space_charge: f32,
     pub accel_voltage: f32,
-    // Decay
-    pub tau_fast: f32,
-    pub tau_slow: f32,
-    pub a_fast: f32,
     // Faceplate scatter
     pub scatter_threshold: f32,
     pub scatter_sigma: f32,
@@ -39,9 +35,6 @@ impl Default for EngineerState {
             halo_fraction: 0.03,
             space_charge: 0.0,
             accel_voltage: 10.0,
-            tau_fast: 0.012,
-            tau_slow: 0.040,
-            a_fast: 0.7,
             scatter_threshold: 0.5,
             scatter_sigma: 4.0,
             scatter_intensity: 0.15,
@@ -52,37 +45,6 @@ impl Default for EngineerState {
             curvature: 0.0,
             edge_falloff: 0.0,
             accum_resolution_scale: 1.0,
-        }
-    }
-}
-
-impl EngineerState {
-    /// Update decay and emission parameters from the selected phosphor type.
-    ///
-    /// TODO(Task 12): Rework for multi-term decay model. Currently extracts
-    /// the first two exponential terms for backward-compatible slider display.
-    pub fn sync_from_phosphor(&mut self, phosphor: &PhosphorType) {
-        use phosphor_data::DecayTerm;
-        let exps: Vec<_> = phosphor
-            .fluorescence
-            .decay_terms
-            .iter()
-            .filter_map(|t| match t {
-                DecayTerm::Exponential { amplitude, tau } => Some((*amplitude, *tau)),
-                _ => None,
-            })
-            .collect();
-        if let Some(&(_, tau)) = exps.first() {
-            self.tau_fast = tau;
-        }
-        if let Some(&(_, tau)) = exps.get(1) {
-            self.tau_slow = tau;
-        }
-        if exps.len() >= 2 {
-            let sum: f32 = exps.iter().map(|(a, _)| a).sum();
-            if sum > 0.0 {
-                self.a_fast = exps[0].0 / sum;
-            }
         }
     }
 }
@@ -144,30 +106,6 @@ pub fn engineer_panel(
         ui.add(egui::Slider::new(&mut state.space_charge, 0.0..=1.0));
         ui.label("Accel voltage");
         ui.add(egui::Slider::new(&mut state.accel_voltage, 1.0..=25.0).text("kV"));
-
-        ui.separator();
-
-        // -- Decay --
-        ui.heading("Decay");
-        ui.label(subscript("τ", "fast"));
-        ui.add(
-            egui::Slider::new(&mut state.tau_fast, 0.001..=0.1)
-                .logarithmic(true)
-                .text("s"),
-        );
-        ui.label(subscript("τ", "slow"));
-        ui.add(
-            egui::Slider::new(&mut state.tau_slow, 0.01..=1.0)
-                .logarithmic(true)
-                .text("s"),
-        );
-        ui.label(subscript("A", "fast"));
-        ui.add(egui::Slider::new(&mut state.a_fast, 0.0..=1.0));
-        let mut a_slow = 1.0 - state.a_fast;
-        ui.label(subscript("A", "slow"));
-        if ui.add(egui::Slider::new(&mut a_slow, 0.0..=1.0)).changed() {
-            state.a_fast = 1.0 - a_slow;
-        }
 
         ui.separator();
 
@@ -253,21 +191,6 @@ pub fn engineer_panel(
             }
         }
     });
-}
-
-fn subscript(base: &str, sub: &str) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    job.append(base, 0.0, egui::TextFormat::default());
-    job.append(
-        sub,
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(9.0),
-            valign: egui::Align::BOTTOM,
-            ..Default::default()
-        },
-    );
-    job
 }
 
 fn fmt_ms(us: f32) -> String {

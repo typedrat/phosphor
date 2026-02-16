@@ -172,26 +172,18 @@ impl App {
                 let Some(gpu) = &mut self.gpu else { return };
                 let Some(ui) = &mut self.ui else { return };
 
+                // Phosphor change: rebuild decay/emission/spectral params + buffer
+                if ui.phosphor_changed() {
+                    gpu.switch_phosphor(ui.selected_phosphor());
+                }
+
                 // Apply UI state to GPU parameters
-                let phosphor = ui.selected_phosphor();
                 let eng = &ui.engineer;
 
                 // Beam -- scope focus overrides core sigma, engineer controls the rest
                 gpu.beam_params.sigma_core = ui.focus;
                 gpu.beam_params.sigma_halo = eng.sigma_halo;
                 gpu.beam_params.halo_fraction = eng.halo_fraction;
-
-                // Decay — terms come from the phosphor, not engineer sliders
-                // TODO(Task 10): Full wiring via switch_phosphor()
-                gpu.decay_params = gpu::decay::DecayParams::from_terms(
-                    &phosphor.fluorescence.decay_terms,
-                    gpu::TAU_CUTOFF,
-                );
-                gpu.emission_params = gpu::beam_write::EmissionParams::from_phosphor(
-                    &phosphor.fluorescence.emission_weights,
-                    &phosphor.fluorescence.decay_terms,
-                    gpu::TAU_CUTOFF,
-                );
 
                 // Faceplate scatter
                 gpu.faceplate_scatter_params.threshold = eng.scatter_threshold;
