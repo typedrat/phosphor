@@ -52,7 +52,7 @@ local linters = new Mapping<String, Step> {
   ["trailing_whitespace"] = Builtins.trailing_whitespace
 }
 
-// Clippy is too slow for pre-commit, define separately
+// Linters plus clippy
 local slow_linters = new Mapping<String, Step> {
   ...linters
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
@@ -66,7 +66,7 @@ hooks {
     fix = true
     // Stash unstaged changes
     stash = "git"
-    steps = linters
+    steps = slow_linters
   }
   ["pre-push"] {
     // Just check, don't fix — includes clippy
