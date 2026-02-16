@@ -207,18 +207,26 @@ impl GpuState {
         }
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub fn resize(&mut self, width: u32, height: u32, buffer_scale: f32) {
         if width > 0 && height > 0 {
             self.surface_config.width = width;
             self.surface_config.height = height;
             self.surface.configure(&self.device, &self.surface_config);
-            self.accum.resize(&self.device, width, height);
-            self.hdr.resize(&self.device, width, height);
-            self.faceplate_scatter_textures
-                .resize(&self.device, width, height);
-            self.beam_params.width = width;
-            self.beam_params.height = height;
+            let bw = ((width as f32) * buffer_scale).round() as u32;
+            let bh = ((height as f32) * buffer_scale).round() as u32;
+            self.resize_buffers(bw.max(1), bh.max(1));
         }
+    }
+
+    /// Resize the internal accumulation, HDR, and scatter buffers without
+    /// touching the swapchain surface. Used when the buffer scale changes.
+    pub fn resize_buffers(&mut self, width: u32, height: u32) {
+        self.accum.resize(&self.device, width, height);
+        self.hdr.resize(&self.device, width, height);
+        self.faceplate_scatter_textures
+            .resize(&self.device, width, height);
+        self.beam_params.width = width;
+        self.beam_params.height = height;
     }
 
     pub fn render(

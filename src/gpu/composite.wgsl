@@ -20,6 +20,8 @@ struct CompositeParams {
     curvature: f32,
     glass_tint: vec3<f32>,
     edge_falloff: f32,
+    viewport_size: vec2<f32>,
+    _pad: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> params: CompositeParams;
@@ -100,8 +102,7 @@ fn barrel_distort(uv: vec2<f32>, k: f32) -> vec2<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_size = vec2<f32>(textureDimensions(hdr_texture));
-    let uv = in.position.xy / tex_size;
+    let uv = in.position.xy / params.viewport_size;
 
     // Screen curvature — remap UV through barrel distortion
     let distorted_uv = barrel_distort(uv, params.curvature);

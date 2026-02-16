@@ -34,6 +34,7 @@ pub struct UiState {
     pub input: InputState,
     tab: PanelTab,
     pub panel_visible: bool,
+    pub accum_size: Option<[u32; 2]>,
 }
 
 impl UiState {
@@ -64,6 +65,7 @@ impl UiState {
             input: InputState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
+            accum_size: None,
         }
     }
 
@@ -115,6 +117,7 @@ impl UiState {
                                     &mut self.phosphor_index,
                                     fps,
                                     timings,
+                                    self.accum_size,
                                 );
                             }
                         }
@@ -190,6 +193,7 @@ impl UiState {
                             &mut self.phosphor_index,
                             fps,
                             timings,
+                            self.accum_size,
                         );
                     }
                 }

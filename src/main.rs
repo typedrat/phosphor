@@ -165,8 +165,12 @@ impl App {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
+                let scale = self
+                    .ui
+                    .as_ref()
+                    .map_or(1.0, |ui| ui.engineer.accum_resolution_scale);
                 if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(size.width, size.height);
+                    gpu.resize(size.width, size.height, scale);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -195,6 +199,17 @@ impl App {
                 gpu.faceplate_scatter_params.sigma = eng.scatter_sigma;
                 gpu.faceplate_scatter_params.intensity = eng.scatter_intensity;
 
+                // Accumulation buffer resolution scale
+                let scale = eng.accum_resolution_scale;
+                let target_w = ((gpu.surface_config.width as f32) * scale).round() as u32;
+                let target_h = ((gpu.surface_config.height as f32) * scale).round() as u32;
+                if target_w.max(1) != gpu.accum.width || target_h.max(1) != gpu.accum.height {
+                    gpu.resize_buffers(target_w.max(1), target_h.max(1));
+                }
+
+                // Feed accumulation buffer size to UI for display
+                ui.accum_size = Some([gpu.accum.width, gpu.accum.height]);
+
                 // Composite / display
                 gpu.composite_params.exposure = ui.intensity;
                 gpu.composite_params.set_mode(eng.tonemap_mode);
@@ -202,6 +217,10 @@ impl App {
                 gpu.composite_params.glass_tint = eng.glass_tint;
                 gpu.composite_params.curvature = eng.curvature;
                 gpu.composite_params.edge_falloff = eng.edge_falloff;
+                gpu.composite_params.viewport_size = [
+                    gpu.surface_config.width as f32,
+                    gpu.surface_config.height as f32,
+                ];
 
                 // Generate beam samples from active input source
                 let aspect = gpu.surface_config.width as f32 / gpu.surface_config.height as f32;
@@ -219,7 +238,7 @@ impl App {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
-                        gpu.resize(w, h);
+                        gpu.resize(w, h, ui.engineer.accum_resolution_scale);
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
                         log::error!("GPU out of memory");

@@ -87,6 +87,7 @@ pub fn engineer_panel(
     phosphor_index: &mut usize,
     fps: f32,
     timings: Option<&TimingHistory>,
+    accum_size: Option<[u32; 2]>,
 ) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // -- Phosphor selector (mirrored from scope panel) --
@@ -197,6 +198,9 @@ pub fn engineer_panel(
         ui.heading("Resolution");
         ui.label("Accum buffer scale");
         ui.add(egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=2.0).text("x"));
+        if let Some([w, h]) = accum_size {
+            ui.label(format!("{w} \u{00d7} {h}"));
+        }
 
         ui.separator();
 
