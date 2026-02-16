@@ -424,8 +424,34 @@ impl ApplicationHandler for App {
         } = &event
         {
             if let Some(ui) = &self.ui {
-                if ui.ctx.input(|i| i.modifiers.ctrl) {
+                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
                     self.toggle_detach(event_loop);
+                    return;
+                }
+            }
+        }
+
+        // Intercept Ctrl/Cmd+F for fullscreen toggle on viewport window
+        if let WindowEvent::KeyboardInput {
+            event:
+                winit::event::KeyEvent {
+                    physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyF),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+            ..
+        } = &event
+        {
+            if let Some(ui) = &self.ui {
+                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
+                    if let Some(window) = &self.window {
+                        if window.fullscreen().is_some() {
+                            window.set_fullscreen(None);
+                        } else {
+                            window
+                                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                        }
+                    }
                     return;
                 }
             }
