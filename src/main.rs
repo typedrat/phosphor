@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 mod app;
 mod beam;
 mod gpu;
@@ -103,6 +105,7 @@ impl ControlsWindow {
     }
 }
 
+#[derive(Default)]
 struct App {
     // Drop order matters: GPU resources (surfaces) must be dropped before the
     // windows they reference, so `gpu` and `controls` are declared before `window`.
@@ -111,18 +114,6 @@ struct App {
     ui: Option<UiState>,
     mode: WindowMode,
     window: Option<Arc<Window>>,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            gpu: None,
-            controls: None,
-            ui: None,
-            mode: WindowMode::default(),
-            window: None,
-        }
-    }
 }
 
 impl App {
@@ -151,14 +142,13 @@ impl App {
     fn handle_viewport_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         // Only pass events to egui in Combined mode (viewport shouldn't
         // consume events for an invisible panel in Detached mode)
-        if self.mode == WindowMode::Combined {
-            if let Some(ui) = &mut self.ui {
-                if let Some(window) = &self.window {
-                    let response = ui.on_event(window, &event);
-                    if response.consumed {
-                        return;
-                    }
-                }
+        if self.mode == WindowMode::Combined
+            && let Some(ui) = &mut self.ui
+            && let Some(window) = &self.window
+        {
+            let response = ui.on_event(window, &event);
+            if response.consumed {
+                return;
             }
         }
 
@@ -274,15 +264,16 @@ impl App {
                 log::info!("Controls window closed, recombined into main window");
             }
             WindowEvent::Resized(size) => {
-                if let Some(controls) = &mut self.controls {
-                    if size.width > 0 && size.height > 0 {
-                        controls.surface_config.width = size.width;
-                        controls.surface_config.height = size.height;
-                        if let Some(gpu) = &self.gpu {
-                            controls
-                                .surface
-                                .configure(&gpu.device, &controls.surface_config);
-                        }
+                if let Some(controls) = &mut self.controls
+                    && size.width > 0
+                    && size.height > 0
+                {
+                    controls.surface_config.width = size.width;
+                    controls.surface_config.height = size.height;
+                    if let Some(gpu) = &self.gpu {
+                        controls
+                            .surface
+                            .configure(&gpu.device, &controls.surface_config);
                     }
                 }
             }
@@ -424,13 +415,11 @@ impl ApplicationHandler for App {
                 },
             ..
         } = &event
+            && let Some(ui) = &self.ui
+            && ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd)
         {
-            if let Some(ui) = &self.ui {
-                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
-                    event_loop.exit();
-                    return;
-                }
-            }
+            event_loop.exit();
+            return;
         }
 
         // Intercept Ctrl+D for detach/attach toggle (on any window)
@@ -443,13 +432,11 @@ impl ApplicationHandler for App {
                 },
             ..
         } = &event
+            && let Some(ui) = &self.ui
+            && ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd)
         {
-            if let Some(ui) = &self.ui {
-                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
-                    self.toggle_detach(event_loop);
-                    return;
-                }
-            }
+            self.toggle_detach(event_loop);
+            return;
         }
 
         // Intercept Ctrl/Cmd+F for fullscreen toggle on viewport window
@@ -462,20 +449,17 @@ impl ApplicationHandler for App {
                 },
             ..
         } = &event
+            && let Some(ui) = &self.ui
+            && ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd)
         {
-            if let Some(ui) = &self.ui {
-                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
-                    if let Some(window) = &self.window {
-                        if window.fullscreen().is_some() {
-                            window.set_fullscreen(None);
-                        } else {
-                            window
-                                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                        }
-                    }
-                    return;
+            if let Some(window) = &self.window {
+                if window.fullscreen().is_some() {
+                    window.set_fullscreen(None);
+                } else {
+                    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
                 }
             }
+            return;
         }
 
         // Route by window ID

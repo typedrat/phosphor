@@ -107,23 +107,22 @@ fn oscilloscope_controls(ui: &mut egui::Ui, input: &mut InputState) {
 }
 
 fn audio_controls(ui: &mut egui::Ui, input: &mut InputState) {
-    if ui.button("Open File...").clicked() {
-        if let Some(path) = rfd::FileDialog::new()
+    if ui.button("Open File...").clicked()
+        && let Some(path) = rfd::FileDialog::new()
             .add_filter("Audio", &["wav", "flac", "ogg", "mp3"])
             .pick_file()
-        {
-            input.load_audio_file(path);
-        }
+    {
+        input.load_audio_file(path);
     }
 
     if let Some(err) = &input.audio.load_error {
         ui.colored_label(egui::Color32::RED, err);
     }
 
-    if let Some(path) = &input.audio.file_path {
-        if let Some(name) = path.file_name() {
-            ui.label(name.to_string_lossy().as_ref());
-        }
+    if let Some(path) = &input.audio.file_path
+        && let Some(name) = path.file_name()
+    {
+        ui.label(name.to_string_lossy().as_ref());
     }
 
     if input.audio.source.is_some() {
@@ -164,23 +163,22 @@ fn audio_controls(ui: &mut egui::Ui, input: &mut InputState) {
 }
 
 fn vector_controls(ui: &mut egui::Ui, input: &mut InputState) {
-    if ui.button("Open File...").clicked() {
-        if let Some(path) = rfd::FileDialog::new()
+    if ui.button("Open File...").clicked()
+        && let Some(path) = rfd::FileDialog::new()
             .add_filter("JSON", &["json"])
             .pick_file()
-        {
-            input.load_vector_file(path);
-        }
+    {
+        input.load_vector_file(path);
     }
 
     if let Some(err) = &input.vector.load_error {
         ui.colored_label(egui::Color32::RED, err);
     }
 
-    if let Some(path) = &input.vector.file_path {
-        if let Some(name) = path.file_name() {
-            ui.label(name.to_string_lossy().as_ref());
-        }
+    if let Some(path) = &input.vector.file_path
+        && let Some(name) = path.file_name()
+    {
+        ui.label(name.to_string_lossy().as_ref());
     }
 
     if !input.vector.segments.is_empty() {
