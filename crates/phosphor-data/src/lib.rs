@@ -9,6 +9,19 @@ use spectral::SPECTRAL_BANDS;
 
 // --- Public types ---
 
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(tag = "type")]
+pub enum DecayTerm {
+    #[serde(rename = "exponential")]
+    Exponential { amplitude: f32, tau: f32 },
+    #[serde(rename = "power_law")]
+    PowerLaw {
+        amplitude: f32,
+        alpha: f32,
+        beta: f32,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhosphorCategory {
     GeneralPurpose,
@@ -17,13 +30,10 @@ pub enum PhosphorCategory {
     LongDecaySulfide,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhosphorLayer {
     pub emission_weights: [f32; SPECTRAL_BANDS],
-    pub tau_fast: f32,
-    pub tau_slow: f32,
-    pub a_fast: f32,
-    pub a_slow: f32,
+    pub decay_terms: Vec<DecayTerm>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,16 +86,22 @@ fn parse_category(s: &str) -> PhosphorCategory {
 }
 
 fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
-    let (tau_fast, tau_slow, a_fast, a_slow) =
+    let (tau_fast, tau_slow, a_fast, _a_slow) =
         decay::fit_decay(data.t_10pct, data.t_1pct, data.t_01pct);
 
     let make_layer = |peak: f32, fwhm: f32| -> PhosphorLayer {
         PhosphorLayer {
             emission_weights: spectral::gaussian_emission_weights(peak, fwhm),
-            tau_fast,
-            tau_slow,
-            a_fast,
-            a_slow,
+            decay_terms: vec![
+                DecayTerm::Exponential {
+                    amplitude: a_fast,
+                    tau: tau_fast,
+                },
+                DecayTerm::Exponential {
+                    amplitude: 1.0 - a_fast,
+                    tau: tau_slow,
+                },
+            ],
         }
     };
 
@@ -106,7 +122,7 @@ fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
             .fwhm_nm
             .unwrap_or_else(|| panic!("{designation}: single-layer phosphor missing fwhm_nm"));
         let layer = make_layer(data.peak_nm, fwhm);
-        (layer, layer, false)
+        (layer.clone(), layer, false)
     };
 
     PhosphorType {
@@ -137,4 +153,45 @@ pub fn load_phosphors_from_file(
 ) -> Result<Vec<PhosphorType>, Box<dyn std::error::Error>> {
     let contents = std::fs::read_to_string(path)?;
     Ok(load_phosphors(&contents)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decay_term_exponential_fields() {
+        let term = DecayTerm::Exponential {
+            amplitude: 6.72,
+            tau: 0.00288,
+        };
+        match term {
+            DecayTerm::Exponential { amplitude, tau } => {
+                assert!((amplitude - 6.72).abs() < 1e-6);
+                assert!((tau - 0.00288).abs() < 1e-8);
+            }
+            _ => panic!("expected Exponential"),
+        }
+    }
+
+    #[test]
+    fn decay_term_power_law_fields() {
+        let term = DecayTerm::PowerLaw {
+            amplitude: 2.1e-4,
+            alpha: 5.5e-6,
+            beta: 1.1,
+        };
+        match term {
+            DecayTerm::PowerLaw {
+                amplitude,
+                alpha,
+                beta,
+            } => {
+                assert!((amplitude - 2.1e-4).abs() < 1e-10);
+                assert!((alpha - 5.5e-6).abs() < 1e-12);
+                assert!((beta - 1.1).abs() < 1e-6);
+            }
+            _ => panic!("expected PowerLaw"),
+        }
+    }
 }
