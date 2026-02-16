@@ -138,6 +138,56 @@ fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
     }
 }
 
+/// Result of classifying a phosphor's decay terms into tiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecayClassification {
+    /// Exponential terms with tau < tau_cutoff (tier 1: computed analytically).
+    pub instant_exp_count: usize,
+    /// Exponential terms with tau >= tau_cutoff (tier 2: multiplicative per-frame).
+    pub slow_exp_count: usize,
+    /// Whether any power-law term exists (tier 3: elapsed-time tracking).
+    pub has_power_law: bool,
+}
+
+impl DecayClassification {
+    /// Total accumulation buffer layers needed for this phosphor layer.
+    pub fn accum_layers(&self) -> usize {
+        let mut layers = self.slow_exp_count * SPECTRAL_BANDS;
+        if self.has_power_law {
+            layers += SPECTRAL_BANDS + 1;
+        }
+        layers
+    }
+}
+
+/// Classify decay terms into tiers based on a time constant cutoff.
+pub fn classify_decay_terms(terms: &[DecayTerm], tau_cutoff: f32) -> DecayClassification {
+    let mut instant = 0;
+    let mut slow = 0;
+    let mut power_law = false;
+
+    for term in terms {
+        match term {
+            DecayTerm::Exponential { tau, .. } => {
+                if *tau < tau_cutoff {
+                    instant += 1;
+                } else {
+                    slow += 1;
+                }
+            }
+            DecayTerm::PowerLaw { .. } => {
+                power_law = true;
+            }
+        }
+    }
+
+    DecayClassification {
+        instant_exp_count: instant,
+        slow_exp_count: slow,
+        has_power_law: power_law,
+    }
+}
+
 /// Parse phosphor definitions from a TOML string.
 pub fn load_phosphors(toml_str: &str) -> Result<Vec<PhosphorType>, toml::de::Error> {
     let table: BTreeMap<String, PhosphorData> = toml::from_str(toml_str)?;
@@ -193,5 +243,50 @@ mod tests {
             }
             _ => panic!("expected PowerLaw"),
         }
+    }
+
+    #[test]
+    fn classify_p1_all_slow_exponential() {
+        let terms = vec![
+            DecayTerm::Exponential {
+                amplitude: 6.72,
+                tau: 0.00288,
+            },
+            DecayTerm::Exponential {
+                amplitude: 1.0,
+                tau: 0.0151,
+            },
+        ];
+        let class = classify_decay_terms(&terms, 1e-4);
+        assert_eq!(class.instant_exp_count, 0);
+        assert_eq!(class.slow_exp_count, 2);
+        assert!(!class.has_power_law);
+    }
+
+    #[test]
+    fn classify_p31_power_law_plus_instant() {
+        let terms = vec![
+            DecayTerm::PowerLaw {
+                amplitude: 2.1e-4,
+                alpha: 5.5e-6,
+                beta: 1.1,
+            },
+            DecayTerm::Exponential {
+                amplitude: 90.0,
+                tau: 31.8e-9,
+            },
+            DecayTerm::Exponential {
+                amplitude: 100.0,
+                tau: 227e-9,
+            },
+            DecayTerm::Exponential {
+                amplitude: 37.0,
+                tau: 1.06e-6,
+            },
+        ];
+        let class = classify_decay_terms(&terms, 1e-4);
+        assert_eq!(class.instant_exp_count, 3);
+        assert_eq!(class.slow_exp_count, 0);
+        assert!(class.has_power_law);
     }
 }
