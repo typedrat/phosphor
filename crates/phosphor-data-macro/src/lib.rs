@@ -86,7 +86,7 @@ pub fn phosphor_table(input: TokenStream) -> TokenStream {
     let phosphors = phosphor_data::load_phosphors(&contents)
         .unwrap_or_else(|e| panic!("Failed to parse {}: {e}", path.display()));
 
-    let entries: Vec<String> = phosphors.iter().map(|p| format_phosphor(p)).collect();
+    let entries: Vec<String> = phosphors.iter().map(format_phosphor).collect();
     let body = entries.join(",\n    ");
     let code = format!("[\n    {body}\n]");
 
