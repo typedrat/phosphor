@@ -11,6 +11,11 @@ use std::time::Instant;
 
 use phosphor_data::spectral::SPECTRAL_BANDS;
 
+/// Time constant cutoff for classifying decay terms into tiers.
+/// Exponentials with tau < TAU_CUTOFF are "instantaneous" (tier 1),
+/// those >= TAU_CUTOFF are "slow" (tier 2).
+pub const TAU_CUTOFF: f32 = 1e-4; // 100 µs
+
 use winit::window::Window;
 
 use crate::beam::BeamSample;
@@ -141,8 +146,10 @@ impl GpuState {
 
         let buffer_res = Resolution::new(surface_config.width, surface_config.height);
 
-        // Single layer for now (8 textures: 4 fast + 4 slow)
-        let accum = AccumulationBuffer::new(&device, buffer_res, 1);
+        // Default: P1 has 2 slow exponentials, no power law → 32 layers.
+        // Recalculated on phosphor switch via switch_phosphor().
+        let default_layers = accumulation::accum_layer_count(2, false);
+        let accum = AccumulationBuffer::new(&device, buffer_res, default_layers);
 
         let beam_write = BeamWritePipeline::new(&device);
 

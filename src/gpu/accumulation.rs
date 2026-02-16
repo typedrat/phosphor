@@ -3,11 +3,16 @@ use phosphor_data::spectral::SPECTRAL_BANDS;
 
 use crate::types::Resolution;
 
-/// Array layers per decay component (fast or slow): one layer per spectral band.
-pub const LAYERS_PER_COMPONENT: u32 = SPECTRAL_BANDS as u32;
-
-/// Total array layers for a single phosphor layer (fast + slow decay).
-pub const LAYERS_PER_DECAY_PAIR: u32 = LAYERS_PER_COMPONENT * 2;
+/// Compute total accumulation buffer layers given a decay classification.
+/// Tier 2: slow_exp_count x SPECTRAL_BANDS
+/// Tier 3: SPECTRAL_BANDS + 1 if has_power_law (peak energy + elapsed time)
+pub fn accum_layer_count(slow_exp_count: usize, has_power_law: bool) -> u32 {
+    let mut layers = slow_exp_count * SPECTRAL_BANDS;
+    if has_power_law {
+        layers += SPECTRAL_BANDS + 1;
+    }
+    layers as u32
+}
 
 /// Dimensions uniform passed to shaders that access the flat accumulation buffer.
 /// Indexing: `layer * (width * height) + y * width + x`
@@ -27,8 +32,7 @@ pub struct AccumulationBuffer {
 }
 
 impl AccumulationBuffer {
-    pub fn new(device: &wgpu::Device, resolution: Resolution, phosphor_layers: u32) -> Self {
-        let layers = LAYERS_PER_DECAY_PAIR * phosphor_layers;
+    pub fn new(device: &wgpu::Device, resolution: Resolution, layers: u32) -> Self {
         let Resolution { width, height } = resolution;
         let size = (width as u64) * (height as u64) * (layers as u64) * 4;
 
@@ -64,8 +68,7 @@ impl AccumulationBuffer {
         if resolution == self.resolution {
             return;
         }
-        let phosphor_layers = self.layers / LAYERS_PER_DECAY_PAIR;
-        *self = Self::new(device, resolution, phosphor_layers);
+        *self = Self::new(device, resolution, self.layers);
     }
 }
 
@@ -119,8 +122,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layer_counts_match_bands() {
-        assert_eq!(LAYERS_PER_COMPONENT, 16);
-        assert_eq!(LAYERS_PER_DECAY_PAIR, 32);
+    fn p1_layer_count() {
+        // P1: 2 slow exponentials x 16 bands = 32 layers
+        assert_eq!(accum_layer_count(2, false), 32);
+    }
+
+    #[test]
+    fn p31_layer_count() {
+        // P31: 0 slow exp, 1 power law -> 16 peak + 1 elapsed = 17
+        assert_eq!(accum_layer_count(0, true), 17);
     }
 }
