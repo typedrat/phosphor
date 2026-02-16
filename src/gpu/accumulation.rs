@@ -1,6 +1,8 @@
 use bytemuck::{Pod, Zeroable};
 use phosphor_data::spectral::SPECTRAL_BANDS;
 
+use crate::types::Resolution;
+
 /// Array layers per decay component (fast or slow): one layer per spectral band.
 pub const LAYERS_PER_COMPONENT: u32 = SPECTRAL_BANDS as u32;
 
@@ -20,14 +22,14 @@ pub struct AccumDims {
 
 pub struct AccumulationBuffer {
     pub buffer: wgpu::Buffer,
-    pub width: u32,
-    pub height: u32,
+    pub resolution: Resolution,
     pub layers: u32,
 }
 
 impl AccumulationBuffer {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, phosphor_layers: u32) -> Self {
+    pub fn new(device: &wgpu::Device, resolution: Resolution, phosphor_layers: u32) -> Self {
         let layers = LAYERS_PER_DECAY_PAIR * phosphor_layers;
+        let Resolution { width, height } = resolution;
         let size = (width as u64) * (height as u64) * (layers as u64) * 4;
 
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -38,33 +40,32 @@ impl AccumulationBuffer {
         });
 
         log::info!(
-            "Accumulation buffer: {layers} layers, {width}x{height}, {:.1} MB VRAM",
+            "Accumulation buffer: {layers} layers, {resolution}, {:.1} MB VRAM",
             size as f64 / (1024.0 * 1024.0)
         );
 
         Self {
             buffer,
-            width,
-            height,
+            resolution,
             layers,
         }
     }
 
     pub fn dims(&self) -> AccumDims {
         AccumDims {
-            width: self.width,
-            height: self.height,
+            width: self.resolution.width,
+            height: self.resolution.height,
             layers: self.layers,
             _pad: 0,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        if width == self.width && height == self.height {
+    pub fn resize(&mut self, device: &wgpu::Device, resolution: Resolution) {
+        if resolution == self.resolution {
             return;
         }
         let phosphor_layers = self.layers / LAYERS_PER_DECAY_PAIR;
-        *self = Self::new(device, width, height, phosphor_layers);
+        *self = Self::new(device, resolution, phosphor_layers);
     }
 }
 
@@ -76,17 +77,16 @@ pub struct HdrBuffer {
     pub texture: wgpu::Texture,
 
     pub view: wgpu::TextureView,
-    pub width: u32,
-    pub height: u32,
+    pub resolution: Resolution,
 }
 
 impl HdrBuffer {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub fn new(device: &wgpu::Device, resolution: Resolution) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hdr_buffer"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: resolution.width,
+                height: resolution.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -102,16 +102,15 @@ impl HdrBuffer {
         Self {
             texture,
             view,
-            width,
-            height,
+            resolution,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        if width == self.width && height == self.height {
+    pub fn resize(&mut self, device: &wgpu::Device, resolution: Resolution) {
+        if resolution == self.resolution {
             return;
         }
-        *self = Self::new(device, width, height);
+        *self = Self::new(device, resolution);
     }
 }
 

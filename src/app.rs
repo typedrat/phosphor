@@ -5,6 +5,7 @@ use crate::beam::audio::AudioSource;
 use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource, Waveform};
 use crate::beam::vector::{VectorSegment, VectorSource};
 use crate::beam::{BeamSample, BeamSource, BeamState};
+use crate::types::Resolution;
 
 /// Calibration constant for beam energy deposition. The beam_write shader
 /// computes `energy = intensity * profile * dt`, where dt is the per-sample
@@ -166,7 +167,12 @@ impl Default for InputState {
 }
 
 impl InputState {
-    pub fn generate_samples(&mut self, focus: f32, aspect: f32) -> Vec<BeamSample> {
+    pub fn generate_samples(
+        &mut self,
+        focus: f32,
+        aspect: f32,
+        accum_resolution: Resolution,
+    ) -> Vec<BeamSample> {
         let now = Instant::now();
         let dt = now
             .duration_since(self.last_generate)
@@ -174,9 +180,11 @@ impl InputState {
             .min(0.1);
         self.last_generate = now;
 
-        let beam = BeamState {
-            spot_radius: focus / 1000.0,
-        };
+        // Convert beam sigma from pixel space to normalized [0,1] coordinates
+        // using the accumulation buffer's actual dimensions.
+        let spot_radius = focus / accum_resolution.width.max(1) as f32;
+
+        let beam = BeamState { spot_radius };
 
         let mut samples = match self.mode {
             InputMode::Oscilloscope => {
@@ -241,6 +249,12 @@ impl InputState {
                 s.y = 0.5 + (s.y - 0.5) * aspect;
             }
         }
+
+        // Arc-length resample: decouple energy deposition from input sample
+        // rate. At high sample rates, consecutive samples are closer than the
+        // beam radius, causing periodic brightness modulation. Merge short
+        // segments so depositions occur at ~0.5× beam sigma intervals.
+        let mut samples = crate::beam::resample::arc_length_resample(&samples, spot_radius * 0.5);
 
         // Scale beam energy to visible levels
         for s in &mut samples {

@@ -1,6 +1,7 @@
 pub mod audio;
 pub mod external;
 pub mod oscilloscope;
+pub mod resample;
 pub mod vector;
 
 /// Current beam physics parameters, shared with input sources that need

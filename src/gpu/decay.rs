@@ -154,8 +154,8 @@ impl DecayPipeline {
             ],
         });
 
-        let workgroups_x = accum.width.div_ceil(16);
-        let workgroups_y = accum.height.div_ceil(16);
+        let workgroups_x = accum.resolution.width.div_ceil(16);
+        let workgroups_y = accum.resolution.height.div_ceil(16);
 
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("decay"),

@@ -14,6 +14,7 @@ use phosphor_data::spectral::SPECTRAL_BANDS;
 use winit::window::Window;
 
 use crate::beam::BeamSample;
+use crate::types::Resolution;
 use crate::ui::EguiRenderOutput;
 
 const SPECTRAL_CONSTANTS: &[(&str, f64)] = &[("SPECTRAL_BANDS", SPECTRAL_BANDS as f64)];
@@ -138,9 +139,10 @@ impl GpuState {
         };
         surface.configure(&device, &surface_config);
 
+        let buffer_res = Resolution::new(surface_config.width, surface_config.height);
+
         // Single layer for now (8 textures: 4 fast + 4 slow)
-        let accum =
-            AccumulationBuffer::new(&device, surface_config.width, surface_config.height, 1);
+        let accum = AccumulationBuffer::new(&device, buffer_res, 1);
 
         let beam_write = BeamWritePipeline::new(&device);
 
@@ -149,8 +151,8 @@ impl GpuState {
             1.5,  // sigma_core (pixels)
             6.0,  // sigma_halo (pixels)
             0.03, // halo_fraction
-            surface_config.width,
-            surface_config.height,
+            buffer_res.width,
+            buffer_res.height,
         );
 
         // Default P1 green phosphor emission — uniform across bands for now
@@ -161,14 +163,13 @@ impl GpuState {
         // Default P1 green phosphor decay — ~12ms fast, ~40ms slow
         let decay_params = DecayParams::new(0.012, 0.040);
 
-        let hdr = HdrBuffer::new(&device, surface_config.width, surface_config.height);
+        let hdr = HdrBuffer::new(&device, buffer_res);
 
         let spectral_resolve = SpectralResolvePipeline::new(&device);
         let spectral_resolve_params = SpectralResolveParams::new();
 
         let faceplate_scatter = FaceplateScatterPipeline::new(&device);
-        let faceplate_scatter_textures =
-            FaceplateScatterTextures::new(&device, surface_config.width, surface_config.height);
+        let faceplate_scatter_textures = FaceplateScatterTextures::new(&device, buffer_res);
         let faceplate_scatter_params = FaceplateScatterParams::default();
 
         let composite = CompositePipeline::new(&device, format);
@@ -216,19 +217,19 @@ impl GpuState {
             self.surface.configure(&self.device, &self.surface_config);
             let bw = ((width as f32) * buffer_scale).round() as u32;
             let bh = ((height as f32) * buffer_scale).round() as u32;
-            self.resize_buffers(bw.max(1), bh.max(1));
+            self.resize_buffers(Resolution::new(bw.max(1), bh.max(1)));
         }
     }
 
     /// Resize the internal accumulation, HDR, and scatter buffers without
     /// touching the swapchain surface. Used when the buffer scale changes.
-    pub fn resize_buffers(&mut self, width: u32, height: u32) {
-        self.accum.resize(&self.device, width, height);
-        self.hdr.resize(&self.device, width, height);
+    pub fn resize_buffers(&mut self, resolution: Resolution) {
+        self.accum.resize(&self.device, resolution);
+        self.hdr.resize(&self.device, resolution);
         self.faceplate_scatter_textures
-            .resize(&self.device, width, height);
-        self.beam_params.width = width;
-        self.beam_params.height = height;
+            .resize(&self.device, resolution);
+        self.beam_params.width = resolution.width;
+        self.beam_params.height = resolution.height;
     }
 
     pub fn render(

@@ -3,6 +3,7 @@ use phosphor_data::spectral::{SPECTRAL_BANDS, band_center};
 use crate::gpu::composite::TonemapMode;
 use crate::gpu::profiler::{HISTORY_CAP, NUM_SEGMENTS, SEGMENT_NAMES, TimingHistory};
 use crate::phosphor::PhosphorType;
+use crate::types::Resolution;
 
 pub struct EngineerState {
     // Beam
@@ -87,7 +88,7 @@ pub fn engineer_panel(
     phosphor_index: &mut usize,
     fps: f32,
     timings: Option<&TimingHistory>,
-    accum_size: Option<[u32; 2]>,
+    accum_size: Option<Resolution>,
 ) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // -- Phosphor selector (mirrored from scope panel) --
@@ -198,8 +199,8 @@ pub fn engineer_panel(
         ui.heading("Resolution");
         ui.label("Accum buffer scale");
         ui.add(egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=2.0).text("x"));
-        if let Some([w, h]) = accum_size {
-            ui.label(format!("{w} \u{00d7} {h}"));
+        if let Some(res) = accum_size {
+            ui.label(res.to_string());
         }
 
         ui.separator();

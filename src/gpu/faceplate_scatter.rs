@@ -2,6 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use super::accumulation::HdrBuffer;
+use crate::types::Resolution;
 
 /// Half-resolution texture pair for ping-pong faceplate_scatter blur.
 pub struct FaceplateScatterTextures {
@@ -11,21 +12,19 @@ pub struct FaceplateScatterTextures {
     #[allow(dead_code)] // kept alive for view_b
     pub tex_b: wgpu::Texture,
     pub view_b: wgpu::TextureView,
-    pub width: u32,
-    pub height: u32,
+    pub resolution: Resolution,
 }
 
 impl FaceplateScatterTextures {
-    pub fn new(device: &wgpu::Device, full_width: u32, full_height: u32) -> Self {
-        let width = (full_width / 2).max(1);
-        let height = (full_height / 2).max(1);
+    pub fn new(device: &wgpu::Device, full: Resolution) -> Self {
+        let resolution = Resolution::new((full.width / 2).max(1), (full.height / 2).max(1));
 
         let create = |label| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
-                    width,
-                    height,
+                    width: resolution.width,
+                    height: resolution.height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -48,18 +47,16 @@ impl FaceplateScatterTextures {
             view_a,
             tex_b,
             view_b,
-            width,
-            height,
+            resolution,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, full_width: u32, full_height: u32) {
-        let w = (full_width / 2).max(1);
-        let h = (full_height / 2).max(1);
-        if w == self.width && h == self.height {
+    pub fn resize(&mut self, device: &wgpu::Device, full: Resolution) {
+        let half = Resolution::new((full.width / 2).max(1), (full.height / 2).max(1));
+        if half == self.resolution {
             return;
         }
-        *self = Self::new(device, full_width, full_height);
+        *self = Self::new(device, full);
     }
 }
 

@@ -4,6 +4,7 @@ mod app;
 mod beam;
 mod gpu;
 mod phosphor;
+mod types;
 mod ui;
 
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use gpu::GpuState;
+use types::Resolution;
 use ui::UiState;
 
 #[derive(Default, PartialEq)]
@@ -193,14 +195,18 @@ impl App {
 
                 // Accumulation buffer resolution scale
                 let scale = eng.accum_resolution_scale;
-                let target_w = ((gpu.surface_config.width as f32) * scale).round() as u32;
-                let target_h = ((gpu.surface_config.height as f32) * scale).round() as u32;
-                if target_w.max(1) != gpu.accum.width || target_h.max(1) != gpu.accum.height {
-                    gpu.resize_buffers(target_w.max(1), target_h.max(1));
+                let target = Resolution::new(
+                    ((gpu.surface_config.width as f32) * scale).round().max(1.0) as u32,
+                    ((gpu.surface_config.height as f32) * scale)
+                        .round()
+                        .max(1.0) as u32,
+                );
+                if target != gpu.accum.resolution {
+                    gpu.resize_buffers(target);
                 }
 
                 // Feed accumulation buffer size to UI for display
-                ui.accum_size = Some([gpu.accum.width, gpu.accum.height]);
+                ui.accum_size = Some(gpu.accum.resolution);
 
                 // Composite / display
                 gpu.composite_params.exposure = ui.intensity;
@@ -216,7 +222,9 @@ impl App {
 
                 // Generate beam samples from active input source
                 let aspect = gpu.surface_config.width as f32 / gpu.surface_config.height as f32;
-                let samples = ui.input.generate_samples(ui.focus, aspect);
+                let samples = ui
+                    .input
+                    .generate_samples(ui.focus, aspect, gpu.accum.resolution);
 
                 // Run egui frame only in Combined mode
                 let egui_output = if self.mode == WindowMode::Combined {

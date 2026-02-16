@@ -6,6 +6,7 @@ use winit::window::Window;
 use crate::app::InputState;
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
+use crate::types::Resolution;
 
 pub use engineer_panel::EngineerState;
 
@@ -34,7 +35,7 @@ pub struct UiState {
     pub input: InputState,
     tab: PanelTab,
     pub panel_visible: bool,
-    pub accum_size: Option<[u32; 2]>,
+    pub accum_size: Option<Resolution>,
 }
 
 impl UiState {
