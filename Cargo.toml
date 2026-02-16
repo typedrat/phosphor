@@ -60,3 +60,4 @@ strum = { version = "0.27.2", features = ["derive"] }
 
 # Native file dialogs
 rfd = "0.15"
+natord = "1.0.9"

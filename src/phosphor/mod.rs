@@ -3,8 +3,11 @@ pub mod spectral;
 pub use phosphor_data::{PhosphorCategory, PhosphorLayer, PhosphorType};
 
 /// Built-in phosphor database, baked at compile time from data/phosphors.toml.
+/// Returned sorted by designation in natural order (P1 < P2 < P10).
 pub fn phosphor_database() -> Vec<PhosphorType> {
-    phosphor_data_macro::phosphor_table!("data/phosphors.toml").to_vec()
+    let mut db = phosphor_data_macro::phosphor_table!("data/phosphors.toml").to_vec();
+    db.sort_by(|a, b| natord::compare(&a.designation, &b.designation));
+    db
 }
 
 /// Load additional phosphors from a TOML file on disk.
