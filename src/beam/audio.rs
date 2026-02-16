@@ -92,6 +92,10 @@ impl AudioSource {
         })
     }
 
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
     pub fn seek(&mut self, fraction: f32) {
         let fraction = fraction.clamp(0.0, 1.0);
         self.position = (fraction * self.samples.len() as f32) as usize;

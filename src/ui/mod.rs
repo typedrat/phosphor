@@ -3,6 +3,7 @@ pub mod scope_panel;
 
 use winit::window::Window;
 
+use crate::app::InputState;
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
 
@@ -29,6 +30,7 @@ pub struct UiState {
     pub intensity: f32,
     pub focus: f32,
     pub engineer: EngineerState,
+    pub input: InputState,
     tab: PanelTab,
     panel_visible: bool,
 }
@@ -53,6 +55,7 @@ impl UiState {
             intensity: 1.0,
             focus: 1.5,
             engineer: EngineerState::default(),
+            input: InputState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
         }
@@ -96,6 +99,7 @@ impl UiState {
                                 &mut self.phosphor_index,
                                 &mut self.intensity,
                                 &mut self.focus,
+                                &mut self.input,
                             ),
                             PanelTab::Engineer => {
                                 engineer_panel::engineer_panel(

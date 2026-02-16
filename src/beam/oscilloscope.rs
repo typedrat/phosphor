@@ -1,18 +1,33 @@
 use super::{BeamSample, BeamSource, BeamState};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, strum::Display, strum::EnumIter)]
 pub enum Waveform {
+    #[default]
     Sine,
     Triangle,
     Square,
     Sawtooth,
 }
 
+#[derive(Clone)]
 pub struct ChannelConfig {
     pub waveform: Waveform,
     pub frequency: f32,
     pub amplitude: f32,
     pub phase: f32,
     pub dc_offset: f32,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            waveform: Waveform::Sine,
+            frequency: 100.0,
+            amplitude: 0.4,
+            phase: 0.0,
+            dc_offset: 0.0,
+        }
+    }
 }
 
 /// Evaluate a waveform at phase `p` (in radians). Returns value in [-1, 1].

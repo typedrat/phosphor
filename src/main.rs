@@ -1,3 +1,4 @@
+mod app;
 mod beam;
 mod gpu;
 mod phosphor;
@@ -108,11 +109,15 @@ impl ApplicationHandler for App {
                 gpu.composite_params.curvature = eng.curvature;
                 gpu.composite_params.edge_falloff = eng.edge_falloff;
 
+                // Generate beam samples from active input source
+                let aspect = gpu.surface_config.width as f32 / gpu.surface_config.height as f32;
+                let samples = ui.input.generate_samples(ui.focus, aspect);
+
                 // Run egui frame
                 let timings = gpu.profiler.as_ref().map(|p| &p.history);
                 let egui_output = ui.run(&window, timings);
 
-                match gpu.render(&[], Some(&egui_output)) {
+                match gpu.render(&samples, Some(&egui_output)) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
