@@ -28,6 +28,10 @@ local linters = new Mapping<String, Step> {
   // Rust:
   ["rustfmt"] = Builtins.rustfmt
 
+  ["cargo-clippy"] = (Builtins.cargo_clippy) {
+    check = "cargo clippy --all-targets -- --deny warnings"
+  }
+
   // WGSL:
   ["wgslfmt"] = new Step {
     glob = List("**/*.wgsl")
@@ -52,25 +56,16 @@ local linters = new Mapping<String, Step> {
   ["trailing_whitespace"] = Builtins.trailing_whitespace
 }
 
-// Linters plus clippy
-local slow_linters = new Mapping<String, Step> {
-  ...linters
-  ["cargo-clippy"] = (Builtins.cargo_clippy) {
-    check = "cargo clippy --all-targets -- --deny warnings"
-  }
-}
-
 hooks {
   ["pre-commit"] {
     // Enable automatic fixes
     fix = true
     // Stash unstaged changes
     stash = "git"
-    steps = slow_linters
+    steps = linters
   }
   ["pre-push"] {
-    // Just check, don't fix — includes clippy
-    steps = slow_linters
+    steps = linters
   }
   ["commit-msg"] {
     steps {
@@ -80,7 +75,7 @@ hooks {
     }
   }
   ["check"] {
-    steps = slow_linters
+    steps = linters
   }
   ["fix"] {
     fix = true
