@@ -1,4 +1,3 @@
-pub mod decay;
 pub mod spectral;
 
 use std::collections::BTreeMap;
