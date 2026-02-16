@@ -47,27 +47,16 @@ impl BeamParams {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct EmissionParams {
-    /// 16 spectral band weights packed into 4 vec4s
-    pub weights: [[f32; 4]; 4],
     pub slow_exp_count: u32,
     pub has_power_law: u32,
     /// Sum of A*tau for tier-1 (instantaneous) exponentials — total integrated
-    /// energy of the fast decay channels, deposited as one-frame spectral emission.
+    /// energy of the fast decay channels, deposited as a one-frame scalar.
     pub instant_energy_total: f32,
     pub has_instant: u32,
 }
 
 impl EmissionParams {
-    pub fn from_phosphor(
-        weights: &[f32; 16],
-        terms: &[phosphor_data::DecayTerm],
-        tau_cutoff: f32,
-    ) -> Self {
-        let mut packed = [[0.0f32; 4]; 4];
-        for (i, &w) in weights.iter().enumerate() {
-            packed[i / 4][i % 4] = w;
-        }
-
+    pub fn from_phosphor(terms: &[phosphor_data::DecayTerm], tau_cutoff: f32) -> Self {
         let class = phosphor_data::classify_decay_terms(terms, tau_cutoff);
 
         // Total integrated energy of tier-1 terms: ∫₀^∞ A·exp(-t/τ) dt = A·τ
@@ -82,7 +71,6 @@ impl EmissionParams {
             .sum();
 
         Self {
-            weights: packed,
             slow_exp_count: class.slow_exp_count as u32,
             has_power_law: if class.has_power_law { 1 } else { 0 },
             instant_energy_total: instant_total,

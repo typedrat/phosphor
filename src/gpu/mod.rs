@@ -180,8 +180,7 @@ impl GpuState {
         let decay_params = DecayParams::from_terms(default_terms, TAU_CUTOFF);
 
         // Default P1 green phosphor emission
-        let emission_params =
-            EmissionParams::from_phosphor(&[1.0 / 16.0; 16], default_terms, TAU_CUTOFF);
+        let emission_params = EmissionParams::from_phosphor(default_terms, TAU_CUTOFF);
 
         let hdr = HdrBuffer::new(&device, buffer_res);
 
@@ -277,11 +276,7 @@ impl GpuState {
         }
 
         self.decay_params = DecayParams::from_terms(terms, TAU_CUTOFF);
-        self.emission_params = EmissionParams::from_phosphor(
-            &phosphor.fluorescence.emission_weights,
-            terms,
-            TAU_CUTOFF,
-        );
+        self.emission_params = EmissionParams::from_phosphor(terms, TAU_CUTOFF);
         self.spectral_resolve_params
             .update_from_phosphor(terms, TAU_CUTOFF);
     }
