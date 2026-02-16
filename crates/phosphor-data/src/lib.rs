@@ -149,10 +149,12 @@ pub struct DecayClassification {
 
 impl DecayClassification {
     /// Total accumulation buffer layers needed for this phosphor layer.
+    /// Each slow exponential term gets 1 scalar layer.
+    /// Power-law gets 2 layers (1 peak energy + 1 elapsed time).
     pub fn accum_layers(&self) -> usize {
-        let mut layers = self.slow_exp_count * SPECTRAL_BANDS;
+        let mut layers = self.slow_exp_count;
         if self.has_power_law {
-            layers += SPECTRAL_BANDS + 1;
+            layers += 2;
         }
         layers
     }

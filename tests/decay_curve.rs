@@ -65,7 +65,7 @@ fn p31_classification_correct() {
     assert_eq!(class.instant_exp_count, 3);
     assert_eq!(class.slow_exp_count, 0);
     assert!(class.has_power_law);
-    assert_eq!(class.accum_layers(), 17);
+    assert_eq!(class.accum_layers(), 2); // was 17: now 0 slow + 2 power-law = 2
 }
 
 #[test]

@@ -1,21 +1,20 @@
 use bytemuck::{Pod, Zeroable};
-use phosphor_data::spectral::SPECTRAL_BANDS;
 
 use crate::types::Resolution;
 
 /// Compute total accumulation buffer layers given a decay classification.
 ///
 /// Layout (in order):
-///   Tier 2: slow_exp_count × SPECTRAL_BANDS
-///   Tier 3: SPECTRAL_BANDS + 1 if has_power_law (peak energy + elapsed time)
-///   Tier 1: SPECTRAL_BANDS if has_instant (one-frame spectral emission)
+///   Tier 2: slow_exp_count layers (1 scalar energy per term)
+///   Tier 3: 2 layers if has_power_law (1 scalar peak energy + 1 elapsed time)
+///   Tier 1: 1 layer if has_instant (1 scalar instant energy)
 pub fn accum_layer_count(slow_exp_count: usize, has_power_law: bool, has_instant: bool) -> u32 {
-    let mut layers = slow_exp_count * SPECTRAL_BANDS;
+    let mut layers = slow_exp_count;
     if has_power_law {
-        layers += SPECTRAL_BANDS + 1;
+        layers += 2;
     }
     if has_instant {
-        layers += SPECTRAL_BANDS;
+        layers += 1;
     }
     layers as u32
 }
@@ -129,19 +128,19 @@ mod tests {
 
     #[test]
     fn p1_layer_count() {
-        // P1: 2 slow exponentials x 16 bands, no power-law, no instant = 32 layers
-        assert_eq!(accum_layer_count(2, false, false), 32);
+        // P1: 2 slow exponentials (1 scalar each), no power-law, no instant = 2 layers
+        assert_eq!(accum_layer_count(2, false, false), 2);
     }
 
     #[test]
     fn p31_layer_count() {
-        // P31: 0 slow exp, 1 power law (16+1), 3 instant exp (16) = 33
-        assert_eq!(accum_layer_count(0, true, true), 33);
+        // P31: 0 slow exp, 1 power law (1 peak + 1 elapsed), 3 instant (1 scalar) = 3
+        assert_eq!(accum_layer_count(0, true, true), 3);
     }
 
     #[test]
     fn p15_layer_count() {
-        // P15: 0 slow exp, no power law, 1 instant exp (16) = 16
-        assert_eq!(accum_layer_count(0, false, true), 16);
+        // P15: 0 slow exp, no power law, 1 instant (1 scalar) = 1
+        assert_eq!(accum_layer_count(0, false, true), 1);
     }
 }
