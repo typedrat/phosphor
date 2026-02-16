@@ -146,9 +146,9 @@ impl GpuState {
 
         let buffer_res = Resolution::new(surface_config.width, surface_config.height);
 
-        // Default: P1 has 2 slow exponentials, no power law → 32 layers.
+        // Default: P1 has 2 slow exponentials, no power law, no instant → 32 layers.
         // Recalculated on phosphor switch via switch_phosphor().
-        let default_layers = accumulation::accum_layer_count(2, false);
+        let default_layers = accumulation::accum_layer_count(2, false, false);
         let accum = AccumulationBuffer::new(&device, buffer_res, default_layers);
 
         let beam_write = BeamWritePipeline::new(&device);
@@ -161,9 +161,6 @@ impl GpuState {
             buffer_res.width,
             buffer_res.height,
         );
-
-        // Default P1 green phosphor emission — uniform across bands for now
-        let emission_params = EmissionParams::new(&[1.0 / 16.0; 16], 0.7);
 
         let decay = DecayPipeline::new(&device);
 
@@ -180,6 +177,10 @@ impl GpuState {
             },
         ];
         let decay_params = DecayParams::from_terms(default_terms, TAU_CUTOFF);
+
+        // Default P1 green phosphor emission
+        let emission_params =
+            EmissionParams::from_phosphor(&[1.0 / 16.0; 16], default_terms, TAU_CUTOFF);
 
         let hdr = HdrBuffer::new(&device, buffer_res);
 
@@ -296,15 +297,9 @@ impl GpuState {
             profiler.timestamp(&mut encoder, GpuQuery::AfterBeamWrite);
         }
 
-        // Decay pass
-        let decay_params = self.decay_params.with_dt(dt);
-        self.decay
-            .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
-        if let Some(profiler) = &self.profiler {
-            profiler.timestamp(&mut encoder, GpuQuery::AfterDecay);
-        }
-
-        // Spectral resolve pass: accumulation textures → HDR texture
+        // Spectral resolve pass: accumulation textures → HDR texture.
+        // Runs before decay so that newly deposited energy (including tier-1
+        // instant emission) is displayed at full brightness this frame.
         self.spectral_resolve.render(
             &self.device,
             &mut encoder,
@@ -314,6 +309,15 @@ impl GpuState {
         );
         if let Some(profiler) = &self.profiler {
             profiler.timestamp(&mut encoder, GpuQuery::AfterSpectralResolve);
+        }
+
+        // Decay pass: runs after spectral resolve so that tier-1 instant
+        // layers are read before being cleared for the next frame.
+        let decay_params = self.decay_params.with_dt(dt);
+        self.decay
+            .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
+        if let Some(profiler) = &self.profiler {
+            profiler.timestamp(&mut encoder, GpuQuery::AfterDecay);
         }
 
         // FaceplateScatter passes: downsample HDR → blur H → blur V

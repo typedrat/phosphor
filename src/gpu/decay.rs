@@ -25,8 +25,8 @@ pub struct DecayParams {
     pub terms: [DecayTermGpu; MAX_DECAY_TERMS],
     pub slow_exp_count: u32,
     pub has_power_law: u32,
-    pub _pad0: u32,
-    pub _pad1: u32,
+    pub has_instant: u32,
+    pub _pad: u32,
 }
 
 impl DecayParams {
@@ -74,8 +74,8 @@ impl DecayParams {
             terms: gpu_terms,
             slow_exp_count: class.slow_exp_count as u32,
             has_power_law: if class.has_power_law { 1 } else { 0 },
-            _pad0: 0,
-            _pad1: 0,
+            has_instant: if class.instant_exp_count > 0 { 1 } else { 0 },
+            _pad: 0,
         }
     }
 

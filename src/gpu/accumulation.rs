@@ -4,12 +4,18 @@ use phosphor_data::spectral::SPECTRAL_BANDS;
 use crate::types::Resolution;
 
 /// Compute total accumulation buffer layers given a decay classification.
-/// Tier 2: slow_exp_count x SPECTRAL_BANDS
-/// Tier 3: SPECTRAL_BANDS + 1 if has_power_law (peak energy + elapsed time)
-pub fn accum_layer_count(slow_exp_count: usize, has_power_law: bool) -> u32 {
+///
+/// Layout (in order):
+///   Tier 2: slow_exp_count × SPECTRAL_BANDS
+///   Tier 3: SPECTRAL_BANDS + 1 if has_power_law (peak energy + elapsed time)
+///   Tier 1: SPECTRAL_BANDS if has_instant (one-frame spectral emission)
+pub fn accum_layer_count(slow_exp_count: usize, has_power_law: bool, has_instant: bool) -> u32 {
     let mut layers = slow_exp_count * SPECTRAL_BANDS;
     if has_power_law {
         layers += SPECTRAL_BANDS + 1;
+    }
+    if has_instant {
+        layers += SPECTRAL_BANDS;
     }
     layers as u32
 }
@@ -123,13 +129,19 @@ mod tests {
 
     #[test]
     fn p1_layer_count() {
-        // P1: 2 slow exponentials x 16 bands = 32 layers
-        assert_eq!(accum_layer_count(2, false), 32);
+        // P1: 2 slow exponentials x 16 bands, no power-law, no instant = 32 layers
+        assert_eq!(accum_layer_count(2, false, false), 32);
     }
 
     #[test]
     fn p31_layer_count() {
-        // P31: 0 slow exp, 1 power law -> 16 peak + 1 elapsed = 17
-        assert_eq!(accum_layer_count(0, true), 17);
+        // P31: 0 slow exp, 1 power law (16+1), 3 instant exp (16) = 33
+        assert_eq!(accum_layer_count(0, true, true), 33);
+    }
+
+    #[test]
+    fn p15_layer_count() {
+        // P15: 0 slow exp, no power law, 1 instant exp (16) = 16
+        assert_eq!(accum_layer_count(0, false, true), 16);
     }
 }

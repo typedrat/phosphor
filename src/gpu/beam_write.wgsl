@@ -34,10 +34,10 @@ struct BeamParams {
 
 struct EmissionParams {
     weights: array<vec4<f32>, 4>,
-    fast_fraction: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    slow_exp_count: u32,
+    has_power_law: u32,
+    instant_energy_total: f32,
+    has_instant: u32,
 }
 
 struct AccumDims {
@@ -184,9 +184,6 @@ fn main(
     let steps_x = i32(ceil(f32(2 * extent_x + 1) / f32(tile_size)));
     let steps_y = i32(ceil(f32(2 * extent_y + 1) / f32(tile_size)));
 
-    let a_fast = emission.fast_fraction;
-    let a_slow = 1.0 - a_fast;
-
     for (var ty = 0; ty < steps_y; ty++) {
         for (var tx = 0; tx < steps_x; tx++) {
             let px_x = i32(center_x) + i32(local_id.x) - extent_x + tx * tile_size;
@@ -236,10 +233,38 @@ fn main(
 
             let base_energy = sample.intensity * profile_val * sample.dt;
 
-            for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-                let energy = base_energy * get_emission_weight(band);
-                atomic_add_f32(accum_index(px_x, px_y, band), energy * a_fast);
-                atomic_add_f32(accum_index(px_x, px_y, SPECTRAL_BANDS + band), energy * a_slow);
+            // Tier 2: deposit into slow exponential layers
+            for (var term = 0u; term < emission.slow_exp_count; term++) {
+                for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+                    let energy = base_energy * get_emission_weight(band);
+                    let layer = term * SPECTRAL_BANDS + band;
+                    atomic_add_f32(accum_index(px_x, px_y, layer), energy);
+                }
+            }
+
+            // Tier 3: deposit peak energy into power-law layers, reset elapsed time
+            if emission.has_power_law == 1u {
+                let pl_base = emission.slow_exp_count * SPECTRAL_BANDS;
+                for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+                    let energy = base_energy * get_emission_weight(band);
+                    atomic_add_f32(accum_index(px_x, px_y, pl_base + band), energy);
+                }
+                // Reset elapsed time to 0 for this texel
+                let time_layer = pl_base + SPECTRAL_BANDS;
+                accum[accum_index(px_x, px_y, time_layer)] = bitcast<u32>(0.0);
+            }
+
+            // Tier 1: deposit instantaneous spectral emission (one-frame layers).
+            // Energy = base × ∑(A·τ) for fast exponentials — the analytically
+            // integrated total output of sub-frame decay channels.
+            if emission.has_instant == 1u {
+                let inst_base = emission.slow_exp_count * SPECTRAL_BANDS
+                    + select(0u, SPECTRAL_BANDS + 1u, emission.has_power_law == 1u);
+                let inst_energy = base_energy * emission.instant_energy_total;
+                for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+                    let energy = inst_energy * get_emission_weight(band);
+                    atomic_add_f32(accum_index(px_x, px_y, inst_base + band), energy);
+                }
             }
         }
     }

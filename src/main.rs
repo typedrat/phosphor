@@ -187,9 +187,10 @@ impl App {
                     &phosphor.fluorescence.decay_terms,
                     gpu::TAU_CUTOFF,
                 );
-                gpu.emission_params = gpu::beam_write::EmissionParams::new(
+                gpu.emission_params = gpu::beam_write::EmissionParams::from_phosphor(
                     &phosphor.fluorescence.emission_weights,
-                    eng.a_fast,
+                    &phosphor.fluorescence.decay_terms,
+                    gpu::TAU_CUTOFF,
                 );
 
                 // Faceplate scatter

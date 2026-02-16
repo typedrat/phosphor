@@ -22,8 +22,8 @@ struct DecayParams {
     terms: array<DecayTermGpu, 8>,
     slow_exp_count: u32,
     has_power_law: u32,
-    _pad0: u32,
-    _pad1: u32,
+    has_instant: u32,
+    _pad: u32,
 }
 
 struct AccumDims {
@@ -101,6 +101,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 break;
             }
+        }
+    }
+
+    // Tier 1: clear instantaneous emission layers (they last exactly one frame).
+    // Spectral resolve has already read them; zero for next frame's beam write.
+    if params.has_instant == 1u {
+        let inst_base = params.slow_exp_count * SPECTRAL_BANDS
+            + select(0u, SPECTRAL_BANDS + 1u, params.has_power_law == 1u);
+        for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+            store_accum(coord.x, coord.y, inst_base + band, 0.0);
         }
     }
 }
