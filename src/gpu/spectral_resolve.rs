@@ -15,6 +15,14 @@ pub struct SpectralResolveParams {
     cie_y: [[f32; 4]; 4],
     /// CIE z_bar weights.
     cie_z: [[f32; 4]; 4],
+    pub slow_exp_count: u32,
+    pub has_power_law: u32,
+    pub power_law_alpha: f32,
+    pub power_law_beta: f32,
+    pub has_instant: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 impl SpectralResolveParams {
@@ -33,6 +41,30 @@ impl SpectralResolveParams {
             cie_x,
             cie_y,
             cie_z,
+            slow_exp_count: 2, // default for P1
+            has_power_law: 0,
+            power_law_alpha: 0.0,
+            power_law_beta: 0.0,
+            has_instant: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        }
+    }
+
+    pub fn update_from_phosphor(&mut self, terms: &[phosphor_data::DecayTerm], tau_cutoff: f32) {
+        let class = phosphor_data::classify_decay_terms(terms, tau_cutoff);
+        self.slow_exp_count = class.slow_exp_count as u32;
+        self.has_power_law = if class.has_power_law { 1 } else { 0 };
+        self.has_instant = if class.instant_exp_count > 0 { 1 } else { 0 };
+
+        // Extract power-law params if present
+        for term in terms {
+            if let phosphor_data::DecayTerm::PowerLaw { alpha, beta, .. } = term {
+                self.power_law_alpha = *alpha;
+                self.power_law_beta = *beta;
+                break;
+            }
         }
     }
 }

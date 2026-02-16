@@ -13,6 +13,14 @@ struct SpectralResolveParams {
     cie_x: array<vec4<f32>, 4>,
     cie_y: array<vec4<f32>, 4>,
     cie_z: array<vec4<f32>, 4>,
+    slow_exp_count: u32,
+    has_power_law: u32,
+    power_law_alpha: f32,
+    power_law_beta: f32,
+    has_instant: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 struct AccumDims {
@@ -85,9 +93,32 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var Z = 0.0;
 
     for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-        // Sum fast + slow decay for this band
-        let energy = load_accum(coord.x, coord.y, band)
-                   + load_accum(coord.x, coord.y, SPECTRAL_BANDS + band);
+        var energy = 0.0;
+
+        // Tier 2: sum slow exponential layers for this band
+        for (var term = 0u; term < params.slow_exp_count; term++) {
+            energy += load_accum(coord.x, coord.y, term * SPECTRAL_BANDS + band);
+        }
+
+        // Tier 3: power-law contribution from stored peak and elapsed time
+        if params.has_power_law == 1u {
+            let pl_base = params.slow_exp_count * SPECTRAL_BANDS;
+            let peak = load_accum(coord.x, coord.y, pl_base + band);
+            if peak > 0.0 {
+                let time_layer = pl_base + SPECTRAL_BANDS;
+                let elapsed = load_accum(coord.x, coord.y, time_layer);
+                energy += peak * pow(
+                    params.power_law_alpha / (elapsed + params.power_law_alpha),
+                    params.power_law_beta);
+            }
+        }
+
+        // Tier 1: instantaneous emission (one-frame spectral data)
+        if params.has_instant == 1u {
+            let inst_base = params.slow_exp_count * SPECTRAL_BANDS
+                + select(0u, SPECTRAL_BANDS + 1u, params.has_power_law == 1u);
+            energy += load_accum(coord.x, coord.y, inst_base + band);
+        }
 
         X += energy * get_cie_weight(0u, band);
         Y += energy * get_cie_weight(1u, band);
