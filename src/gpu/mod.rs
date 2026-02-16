@@ -79,10 +79,15 @@ impl GpuState {
             features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
 
+        let adapter_limits = adapter.limits();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("phosphor"),
             required_features: features,
-            required_limits: wgpu::Limits::default(),
+            required_limits: wgpu::Limits {
+                max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
+                max_buffer_size: adapter_limits.max_buffer_size,
+                ..wgpu::Limits::default()
+            },
             ..Default::default()
         }))
         .expect("failed to create GPU device");
@@ -247,7 +252,6 @@ impl GpuState {
             let params = self.beam_params.with_sample_count(samples.len() as u32);
             self.beam_write.dispatch(
                 &self.device,
-                &self.queue,
                 &mut encoder,
                 samples,
                 &params,

@@ -1,8 +1,11 @@
 // Beam Write Compute Shader
 //
 // For each BeamSample, splats a Gaussian spot profile into the spectral
-// accumulation texture array. One workgroup per sample, threads cooperatively
+// accumulation buffer. One workgroup per sample, threads cooperatively
 // cover the spot footprint tile.
+//
+// Uses atomic CAS-loop float addition to correctly accumulate overlapping
+// spots that write to the same pixel from concurrent workgroups.
 
 override SPECTRAL_BANDS: u32 = 16u;
 
@@ -35,17 +38,38 @@ struct EmissionParams {
     _pad2: f32,
 }
 
+struct AccumDims {
+    width: u32,
+    height: u32,
+    layers: u32,
+    _pad: u32,
+}
+
 @group(0) @binding(0) var<storage, read> samples: array<BeamSample>;
 @group(0) @binding(1) var<uniform> params: BeamParams;
 @group(0) @binding(2) var<uniform> emission: EmissionParams;
 
-// Single 2D array texture: layers 0..N-1 = fast, N..2N-1 = slow.
-@group(1) @binding(0) var accum: texture_storage_2d_array<r32float, read_write>;
+@group(1) @binding(0) var<storage, read_write> accum: array<atomic<u32>>;
+@group(1) @binding(1) var<uniform> accum_dims: AccumDims;
 
 fn get_emission_weight(band: u32) -> f32 {
     let vec_idx = band / 4u;
     let comp_idx = band % 4u;
     return emission.weights[vec_idx][comp_idx];
+}
+
+fn accum_index(x: i32, y: i32, layer: u32) -> u32 {
+    return layer * (accum_dims.width * accum_dims.height) + u32(y) * accum_dims.width + u32(x);
+}
+
+fn atomic_add_f32(idx: u32, delta: f32) {
+    if delta == 0.0 { return; }
+    loop {
+        let old = atomicLoad(&accum[idx]);
+        let new_val = bitcast<u32>(bitcast<f32>(old) + delta);
+        let result = atomicCompareExchangeWeak(&accum[idx], old, new_val);
+        if result.exchanged { break; }
+    }
 }
 
 // Evaluate Gaussian core + halo spot profile at distance r
@@ -120,20 +144,15 @@ fn main(
             let profile = spot_profile(r_sq);
             let base_energy = sample.intensity * profile * sample.dt;
 
-            let coord = vec2<i32>(px_x, px_y);
-
             // Deposit into each spectral band layer
             for (var band = 0u; band < SPECTRAL_BANDS; band++) {
                 let energy = base_energy * get_emission_weight(band);
 
                 // Fast decay layer
-                let prev_fast = textureLoad(accum, coord, band).r;
-                textureStore(accum, coord, band, vec4<f32>(prev_fast + energy * a_fast, 0.0, 0.0, 0.0));
+                atomic_add_f32(accum_index(px_x, px_y, band), energy * a_fast);
 
                 // Slow decay layer
-                let slow_layer = SPECTRAL_BANDS + band;
-                let prev_slow = textureLoad(accum, coord, slow_layer).r;
-                textureStore(accum, coord, slow_layer, vec4<f32>(prev_slow + energy * a_slow, 0.0, 0.0, 0.0));
+                atomic_add_f32(accum_index(px_x, px_y, SPECTRAL_BANDS + band), energy * a_slow);
             }
         }
     }

@@ -100,7 +100,7 @@ fn oscilloscope_controls(ui: &mut egui::Ui, input: &mut InputState) {
     ui.separator();
 
     ui.add(
-        egui::Slider::new(&mut osc.sample_rate, 1_000.0..=96_000.0)
+        egui::Slider::new(&mut osc.sample_rate, 1_000.0..=192_000.0)
             .logarithmic(true)
             .text("Sample Rate"),
     );

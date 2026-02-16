@@ -1,7 +1,7 @@
 // Spectral Resolve Fragment Shader
 //
-// Stage 1 of the display pipeline. Reads the spectral accumulation texture
-// array, integrates energy per band against CIE 1931 color matching functions
+// Stage 1 of the display pipeline. Reads the spectral accumulation buffer,
+// integrates energy per band against CIE 1931 color matching functions
 // to produce XYZ tristimulus values, converts to linear sRGB, and applies
 // gamut mapping. Outputs unbounded linear HDR RGB to an intermediate texture.
 
@@ -15,10 +15,25 @@ struct SpectralResolveParams {
     cie_z: array<vec4<f32>, 4>,
 }
 
+struct AccumDims {
+    width: u32,
+    height: u32,
+    layers: u32,
+    _pad: u32,
+}
+
 @group(0) @binding(0) var<uniform> params: SpectralResolveParams;
 
-// Accumulation texture array bound as sampled texture for reading.
-@group(1) @binding(0) var accum: texture_2d_array<f32>;
+@group(1) @binding(0) var<storage, read> accum: array<u32>;
+@group(1) @binding(1) var<uniform> accum_dims: AccumDims;
+
+fn accum_index(x: i32, y: i32, layer: u32) -> u32 {
+    return layer * (accum_dims.width * accum_dims.height) + u32(y) * accum_dims.width + u32(x);
+}
+
+fn load_accum(x: i32, y: i32, layer: u32) -> f32 {
+    return bitcast<f32>(accum[accum_index(x, y, layer)]);
+}
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -71,8 +86,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     for (var band = 0u; band < SPECTRAL_BANDS; band++) {
         // Sum fast + slow decay for this band
-        let energy = textureLoad(accum, coord, band, 0).r
-                   + textureLoad(accum, coord, SPECTRAL_BANDS + band, 0).r;
+        let energy = load_accum(coord.x, coord.y, band)
+                   + load_accum(coord.x, coord.y, SPECTRAL_BANDS + band);
 
         X += energy * get_cie_weight(0u, band);
         Y += energy * get_cie_weight(1u, band);

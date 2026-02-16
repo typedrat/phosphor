@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use phosphor_data::spectral::SPECTRAL_BANDS;
 
 /// Array layers per decay component (fast or slow): one layer per spectral band.
@@ -6,12 +7,19 @@ pub const LAYERS_PER_COMPONENT: u32 = SPECTRAL_BANDS as u32;
 /// Total array layers for a single phosphor layer (fast + slow decay).
 pub const LAYERS_PER_DECAY_PAIR: u32 = LAYERS_PER_COMPONENT * 2;
 
-pub struct AccumulationBuffer {
-    // Kept alive for its view.
-    #[allow(dead_code)]
-    pub texture: wgpu::Texture,
+/// Dimensions uniform passed to shaders that access the flat accumulation buffer.
+/// Indexing: `layer * (width * height) + y * width + x`
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct AccumDims {
+    pub width: u32,
+    pub height: u32,
+    pub layers: u32,
+    pub _pad: u32,
+}
 
-    pub view: wgpu::TextureView,
+pub struct AccumulationBuffer {
+    pub buffer: wgpu::Buffer,
     pub width: u32,
     pub height: u32,
     pub layers: u32,
@@ -20,36 +28,34 @@ pub struct AccumulationBuffer {
 impl AccumulationBuffer {
     pub fn new(device: &wgpu::Device, width: u32, height: u32, phosphor_layers: u32) -> Self {
         let layers = LAYERS_PER_DECAY_PAIR * phosphor_layers;
+        let size = (width as u64) * (height as u64) * (layers as u64) * 4;
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("accumulation"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: layers,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let vram_bytes = layers as u64 * width as u64 * height as u64 * 4; // 1 × f32
         log::info!(
-            "Accumulation buffer: {layers} R32Float layers, {width}x{height}, {:.1} MB VRAM",
-            vram_bytes as f64 / (1024.0 * 1024.0)
+            "Accumulation buffer: {layers} layers, {width}x{height}, {:.1} MB VRAM",
+            size as f64 / (1024.0 * 1024.0)
         );
 
         Self {
-            texture,
-            view,
+            buffer,
             width,
             height,
             layers,
+        }
+    }
+
+    pub fn dims(&self) -> AccumDims {
+        AccumDims {
+            width: self.width,
+            height: self.height,
+            layers: self.layers,
+            _pad: 0,
         }
     }
 
