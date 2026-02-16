@@ -8,10 +8,11 @@ mod types;
 mod ui;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use gpu::GpuState;
@@ -107,7 +108,9 @@ impl ControlsWindow {
     }
 }
 
-#[derive(Default)]
+/// Fallback frame interval when the monitor refresh rate can't be queried.
+const DEFAULT_FRAME_INTERVAL: Duration = Duration::from_micros(16_667); // 60 Hz
+
 struct App {
     // Drop order matters: GPU resources (surfaces) must be dropped before the
     // windows they reference, so `gpu` and `controls` are declared before `window`.
@@ -116,6 +119,22 @@ struct App {
     ui: Option<UiState>,
     mode: WindowMode,
     window: Option<Arc<Window>>,
+    frame_interval: Duration,
+    next_frame: Instant,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            gpu: None,
+            controls: None,
+            ui: None,
+            mode: WindowMode::default(),
+            window: None,
+            frame_interval: DEFAULT_FRAME_INTERVAL,
+            next_frame: Instant::now(),
+        }
+    }
 }
 
 impl App {
@@ -397,6 +416,21 @@ impl ApplicationHandler for App {
             }
         };
 
+        // Query the monitor's native refresh rate for frame pacing.
+        // Fifo present mode alone isn't reliable on all Linux compositors,
+        // so we also pace via ControlFlow::WaitUntil in about_to_wait.
+        if let Some(monitor) = window.current_monitor()
+            && let Some(millihertz) = monitor.refresh_rate_millihertz()
+        {
+            let micros = 1_000_000_000 / millihertz as u64;
+            self.frame_interval = Duration::from_micros(micros);
+            log::info!(
+                "Monitor refresh rate: {:.1} Hz (frame interval: {:.2} ms)",
+                millihertz as f64 / 1000.0,
+                micros as f64 / 1000.0,
+            );
+        }
+
         let mut gpu = GpuState::new(window.clone());
         let ui = UiState::new(&window);
         gpu.switch_phosphor(ui.selected_phosphor());
@@ -482,13 +516,23 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
         if let Some(controls) = &self.controls {
             controls.window.request_redraw();
         }
+        // Pace frames to the monitor's native refresh rate. Fifo present
+        // mode should do this via swapchain blocking, but doesn't reliably
+        // engage on all Linux Vulkan compositors.
+        self.next_frame += self.frame_interval;
+        // If we fell behind (e.g. long frame), reset to avoid a burst of catch-up frames
+        let now = Instant::now();
+        if self.next_frame < now {
+            self.next_frame = now + self.frame_interval;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }
 

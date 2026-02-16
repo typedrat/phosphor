@@ -2,7 +2,7 @@ use phosphor_data::{DecayTerm, classify_decay_terms};
 
 #[test]
 fn p1_decay_matches_selomulya() {
-    let terms = vec![
+    let terms = [
         DecayTerm::Exponential {
             amplitude: 6.72,
             tau: 0.00288,

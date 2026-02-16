@@ -174,4 +174,5 @@ data/
 
 - **Main thread**: winit event loop, egui rendering, GPU command submission, beam sample generation
 - Input sources run synchronously on the main thread during `RedrawRequested`, generating samples for the current frame
+- Frame pacing via `ControlFlow::WaitUntil` at the monitor's native refresh rate (queried from `current_monitor().refresh_rate_millihertz()`). This is necessary because `PresentMode::AutoVsync` (Mailbox) doesn't reliably throttle the event loop on all Linux Vulkan compositors. Beam sample count per frame is `sample_rate * dt`, so stable frame pacing is critical for smooth traces.
 - SPSC ring buffer (`rtrb`) available for future threaded input sources
