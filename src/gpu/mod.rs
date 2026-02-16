@@ -185,7 +185,10 @@ impl GpuState {
         let hdr = HdrBuffer::new(&device, buffer_res);
 
         let spectral_resolve = SpectralResolvePipeline::new(&device);
-        let spectral_resolve_params = SpectralResolveParams::new();
+        let mut spectral_resolve_params = SpectralResolveParams::new();
+        // Safe default: flat emission spectrum, will be overridden on first
+        // phosphor switch from the UI.
+        spectral_resolve_params.update_from_phosphor(&[1.0 / 16.0; 16], default_terms, TAU_CUTOFF);
 
         let faceplate_scatter = FaceplateScatterPipeline::new(&device);
         let faceplate_scatter_textures = FaceplateScatterTextures::new(&device, buffer_res);
@@ -277,8 +280,11 @@ impl GpuState {
 
         self.decay_params = DecayParams::from_terms(terms, TAU_CUTOFF);
         self.emission_params = EmissionParams::from_phosphor(terms, TAU_CUTOFF);
-        self.spectral_resolve_params
-            .update_from_phosphor(terms, TAU_CUTOFF);
+        self.spectral_resolve_params.update_from_phosphor(
+            &phosphor.fluorescence.emission_weights,
+            terms,
+            TAU_CUTOFF,
+        );
     }
 
     pub fn render(
