@@ -55,6 +55,16 @@ impl Default for EngineerState {
     }
 }
 
+impl EngineerState {
+    /// Update decay and emission parameters from the selected phosphor type.
+    pub fn sync_from_phosphor(&mut self, phosphor: &PhosphorType) {
+        let layer = &phosphor.fluorescence;
+        self.tau_fast = layer.tau_fast;
+        self.tau_slow = layer.tau_slow;
+        self.a_fast = layer.a_fast;
+    }
+}
+
 const TONEMAP_MODES: &[(TonemapMode, &str)] = &[
     (TonemapMode::Reinhard, "Reinhard"),
     (TonemapMode::Aces, "ACES"),

@@ -27,6 +27,7 @@ pub struct UiState {
     winit_state: egui_winit::State,
     pub phosphors: Vec<PhosphorType>,
     pub phosphor_index: usize,
+    prev_phosphor_index: usize,
     pub intensity: f32,
     pub focus: f32,
     pub engineer: EngineerState,
@@ -47,14 +48,19 @@ impl UiState {
             None,
         );
 
+        let phosphors = phosphor_database();
+        let mut engineer = EngineerState::default();
+        engineer.sync_from_phosphor(&phosphors[0]);
+
         Self {
             ctx,
             winit_state,
-            phosphors: phosphor_database(),
+            phosphors,
             phosphor_index: 0,
+            prev_phosphor_index: 0,
             intensity: 1.0,
             focus: 1.5,
-            engineer: EngineerState::default(),
+            engineer,
             input: InputState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
@@ -123,6 +129,13 @@ impl UiState {
                     });
             }
         });
+
+        // Sync engineer params when phosphor selection changes
+        if self.phosphor_index != self.prev_phosphor_index {
+            self.engineer
+                .sync_from_phosphor(&self.phosphors[self.phosphor_index]);
+            self.prev_phosphor_index = self.phosphor_index;
+        }
 
         self.winit_state
             .handle_platform_output(window, full_output.platform_output);
