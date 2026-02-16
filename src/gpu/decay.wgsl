@@ -60,57 +60,48 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let threshold = params.threshold;
 
-    // Tier 2: slow exponentials — multiplicative decay
+    // Tier 2: slow exponentials — multiplicative decay on scalar energy
     for (var term = 0u; term < params.slow_exp_count; term++) {
         let tau = params.terms[term].param1;
         let factor = exp(-params.dt / tau);
-        for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-            let layer = term * SPECTRAL_BANDS + band;
-            let val = load_accum(coord.x, coord.y, layer);
-            let decayed = val * factor;
-            store_accum(coord.x, coord.y, layer,
-                select(decayed, 0.0, decayed < threshold));
-        }
+        let val = load_accum(coord.x, coord.y, term);
+        let decayed = val * factor;
+        store_accum(coord.x, coord.y, term,
+            select(decayed, 0.0, decayed < threshold));
     }
 
-    // Tier 3: power-law — elapsed time tracking
+    // Tier 3: power-law — elapsed time tracking (scalar peak + elapsed)
     if params.has_power_law == 1u {
-        let base = params.slow_exp_count * SPECTRAL_BANDS;
-        let time_layer = base + SPECTRAL_BANDS;
+        let pl_peak_layer = params.slow_exp_count;
+        let time_layer = pl_peak_layer + 1u;
 
         var elapsed = load_accum(coord.x, coord.y, time_layer);
         elapsed += params.dt;
         store_accum(coord.x, coord.y, time_layer, elapsed);
 
-        // Find the power-law term (first one with type_flag == 1.0)
-        for (var i = 0u; i < params.term_count; i++) {
-            if params.terms[i].type_flag == 1.0 {
-                let alpha = params.terms[i].param1;
-                let beta = params.terms[i].param2;
-
-                // Threshold dead texels to save compute
-                for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-                    let peak = load_accum(coord.x, coord.y, base + band);
-                    if peak > 0.0 {
-                        let value = peak
-                            * pow(alpha / (elapsed + alpha), beta);
-                        if value < threshold {
-                            store_accum(coord.x, coord.y, base + band, 0.0);
-                        }
+        // Threshold dead texels to save compute
+        let peak = load_accum(coord.x, coord.y, pl_peak_layer);
+        if peak > 0.0 {
+            // Find the power-law term (first one with type_flag == 1.0)
+            for (var i = 0u; i < params.term_count; i++) {
+                if params.terms[i].type_flag == 1.0 {
+                    let alpha = params.terms[i].param1;
+                    let beta = params.terms[i].param2;
+                    let value = peak * pow(alpha / (elapsed + alpha), beta);
+                    if value < threshold {
+                        store_accum(coord.x, coord.y, pl_peak_layer, 0.0);
                     }
+                    break;
                 }
-                break;
             }
         }
     }
 
-    // Tier 1: clear instantaneous emission layers (they last exactly one frame).
-    // Spectral resolve has already read them; zero for next frame's beam write.
+    // Tier 1: clear instantaneous emission layer (it lasts exactly one frame).
+    // Spectral resolve has already read it; zero for next frame's beam write.
     if params.has_instant == 1u {
-        let inst_base = params.slow_exp_count * SPECTRAL_BANDS
-            + select(0u, SPECTRAL_BANDS + 1u, params.has_power_law == 1u);
-        for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-            store_accum(coord.x, coord.y, inst_base + band, 0.0);
-        }
+        let inst_layer = params.slow_exp_count
+            + select(0u, 2u, params.has_power_law == 1u);
+        store_accum(coord.x, coord.y, inst_layer, 0.0);
     }
 }
