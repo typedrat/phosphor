@@ -1,5 +1,6 @@
 use phosphor_data::spectral::{SPECTRAL_BANDS, band_center};
 
+use crate::gpu::TAU_CUTOFF;
 use crate::gpu::composite::TonemapMode;
 use crate::gpu::profiler::{HISTORY_CAP, NUM_SEGMENTS, SEGMENT_NAMES, TimingHistory};
 use crate::phosphor::PhosphorType;
@@ -91,6 +92,12 @@ pub fn engineer_panel(
 
         let phosphor = &phosphors[*phosphor_index];
         emission_spectrum_plot(ui, phosphor);
+
+        ui.separator();
+
+        // -- Decay terms --
+        ui.heading("Decay");
+        decay_term_display(ui, phosphor);
 
         ui.separator();
 
@@ -291,4 +298,56 @@ fn gpu_timing_plot(ui: &mut egui::Ui, history: &TimingHistory) {
             plot_ui.line(line);
         }
     });
+}
+
+fn decay_term_display(ui: &mut egui::Ui, phosphor: &PhosphorType) {
+    let terms = &phosphor.fluorescence.decay_terms;
+    let class = phosphor_data::classify_decay_terms(terms, TAU_CUTOFF);
+
+    ui.label(format!(
+        "{} terms: {} instant, {} slow, {}",
+        terms.len(),
+        class.instant_exp_count,
+        class.slow_exp_count,
+        if class.has_power_law {
+            "power-law"
+        } else {
+            "no power-law"
+        },
+    ));
+    ui.label(format!("Buffer layers: {}", class.accum_layers()));
+
+    for term in terms {
+        match term {
+            phosphor_data::DecayTerm::Exponential { amplitude, tau } => {
+                let tier = if *tau < TAU_CUTOFF { "T1" } else { "T2" };
+                ui.label(format!(
+                    "  [{tier}] exp: A={amplitude:.3e}, tau={}",
+                    format_time(*tau)
+                ));
+            }
+            phosphor_data::DecayTerm::PowerLaw {
+                amplitude,
+                alpha,
+                beta,
+            } => {
+                ui.label(format!(
+                    "  [T3] pow: A={amplitude:.3e}, alpha={}, beta={beta:.2}",
+                    format_time(*alpha)
+                ));
+            }
+        }
+    }
+}
+
+fn format_time(seconds: f32) -> String {
+    if seconds >= 1.0 {
+        format!("{seconds:.3} s")
+    } else if seconds >= 1e-3 {
+        format!("{:.3} ms", seconds * 1e3)
+    } else if seconds >= 1e-6 {
+        format!("{:.3} us", seconds * 1e6)
+    } else {
+        format!("{:.1} ns", seconds * 1e9)
+    }
 }
