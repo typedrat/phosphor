@@ -37,16 +37,16 @@ impl DecayParams {
         // Pack slow exponentials first (tier 2), then power-law (tier 3)
         let mut idx = 0;
         for term in terms {
-            if let phosphor_data::DecayTerm::Exponential { amplitude, tau } = term {
-                if *tau >= tau_cutoff {
-                    gpu_terms[idx] = DecayTermGpu {
-                        amplitude: *amplitude,
-                        param1: *tau,
-                        param2: 0.0,
-                        type_flag: 0.0,
-                    };
-                    idx += 1;
-                }
+            if let phosphor_data::DecayTerm::Exponential { amplitude, tau } = term
+                && *tau >= tau_cutoff
+            {
+                gpu_terms[idx] = DecayTermGpu {
+                    amplitude: *amplitude,
+                    param1: *tau,
+                    param2: 0.0,
+                    type_flag: 0.0,
+                };
+                idx += 1;
             }
         }
         for term in terms {
