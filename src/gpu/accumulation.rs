@@ -48,7 +48,7 @@ impl AccumulationBuffer {
             mapped_at_creation: false,
         });
 
-        log::info!(
+        tracing::info!(
             "Accumulation buffer: {layers} layers, {resolution}, {:.1} MB VRAM",
             size as f64 / (1024.0 * 1024.0)
         );

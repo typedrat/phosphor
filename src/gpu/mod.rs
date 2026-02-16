@@ -81,7 +81,7 @@ impl GpuState {
         }))
         .expect("no suitable GPU adapter found");
 
-        log::info!("GPU adapter: {}", adapter.get_info().name);
+        tracing::info!("GPU adapter: {}", adapter.get_info().name);
 
         let mut features = wgpu::Features::FLOAT32_FILTERABLE;
         let has_timestamps = GpuProfiler::supports_timestamps(&adapter);
@@ -120,7 +120,7 @@ impl GpuState {
             .find(|f| **f == wgpu::TextureFormat::Rgba16Float)
             .copied();
         let (format, hdr_output) = if let Some(fmt) = hdr_format {
-            log::info!("HDR surface format available: {fmt:?}");
+            tracing::info!("HDR surface format available: {fmt:?}");
             (fmt, true)
         } else {
             let srgb = surface_caps
@@ -129,7 +129,7 @@ impl GpuState {
                 .find(|f| f.is_srgb())
                 .copied()
                 .unwrap_or(surface_caps.formats[0]);
-            log::info!("SDR surface format: {srgb:?}");
+            tracing::info!("SDR surface format: {srgb:?}");
             (srgb, false)
         };
 

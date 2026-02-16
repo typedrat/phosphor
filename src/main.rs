@@ -43,7 +43,7 @@ impl ControlsWindow {
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                log::error!("Failed to create controls window: {e}");
+                tracing::error!("Failed to create controls window: {e}");
                 return None;
             }
         };
@@ -146,7 +146,7 @@ impl App {
                 if let Some(controls) = ControlsWindow::new(event_loop, gpu, ui.ctx.clone()) {
                     self.controls = Some(controls);
                     self.mode = WindowMode::Detached;
-                    log::info!("Detached controls to separate window");
+                    tracing::info!("Detached controls to separate window");
                 }
             }
             WindowMode::Detached => {
@@ -155,7 +155,7 @@ impl App {
                 if let Some(ui) = &mut self.ui {
                     ui.panel_visible = true;
                 }
-                log::info!("Combined controls back into main window");
+                tracing::info!("Combined controls back into main window");
             }
         }
     }
@@ -257,11 +257,11 @@ impl App {
                         gpu.resize(w, h, ui.engineer.accum_resolution_scale);
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
-                        log::error!("GPU out of memory");
+                        tracing::error!("GPU out of memory");
                         event_loop.exit();
                     }
                     Err(e) => {
-                        log::warn!("Surface error: {e:?}");
+                        tracing::warn!("Surface error: {e:?}");
                     }
                 }
             }
@@ -285,7 +285,7 @@ impl App {
                 if let Some(ui) = &mut self.ui {
                     ui.panel_visible = true;
                 }
-                log::info!("Controls window closed, recombined into main window");
+                tracing::info!("Controls window closed, recombined into main window");
             }
             WindowEvent::Resized(size) => {
                 if let Some(controls) = &mut self.controls
@@ -324,12 +324,12 @@ impl App {
                 return;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("GPU out of memory (controls window)");
+                tracing::error!("GPU out of memory (controls window)");
                 event_loop.exit();
                 return;
             }
             Err(e) => {
-                log::warn!("Controls surface error: {e:?}");
+                tracing::warn!("Controls surface error: {e:?}");
                 return;
             }
         };
@@ -410,7 +410,7 @@ impl ApplicationHandler for App {
         let window: Arc<Window> = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                log::error!("Failed to create window: {e}");
+                tracing::error!("Failed to create window: {e}");
                 event_loop.exit();
                 return;
             }
@@ -424,7 +424,7 @@ impl ApplicationHandler for App {
         {
             let micros = 1_000_000_000 / millihertz as u64;
             self.frame_interval = Duration::from_micros(micros);
-            log::info!(
+            tracing::info!(
                 "Monitor refresh rate: {:.1} Hz (frame interval: {:.2} ms)",
                 millihertz as f64 / 1000.0,
                 micros as f64 / 1000.0,
@@ -536,9 +536,19 @@ impl ApplicationHandler for App {
     }
 }
 
-fn main() {
-    env_logger::init();
+fn main() -> anyhow::Result<()> {
+    let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stderr());
+    let env_filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive("phosphor=info".parse()?)
+        .from_env()?;
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_writer(non_blocking)
+        .init();
+
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App::default();
     event_loop.run_app(&mut app).expect("event loop error");
+
+    Ok(())
 }
