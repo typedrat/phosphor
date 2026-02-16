@@ -6,9 +6,9 @@ A physically-based X-Y CRT simulator. The core principle is to model the actual 
 
 The system has four major subsystems:
 
-1. **Phosphor Model** (`docs/design-phosphor-model.md`) — Spectral emission, multi-exponential decay, dual-layer phosphors
-2. **Beam & Input** (`docs/design-beam-input.md`) — Electron beam physics, spot profile, and the four input modes
-3. **GPU Rendering Pipeline** (`docs/design-gpu-pipeline.md`) — Accumulation buffers, compute shaders, display pipeline
+1. **Phosphor Model** (`docs/design-phosphor-model.md`) — Spectral emission, three-tier hybrid decay, dual-layer phosphors
+2. **Beam & Input** (`docs/design-beam-input.md`) — Electron beam physics, spot profile, arc-length resampling, and the four input modes
+3. **GPU Rendering Pipeline** (`docs/design-gpu-pipeline.md`) — Scalar accumulation buffer, six-pass compute/render pipeline, HDR output
 4. **UI** (`docs/design-ui.md`) — egui controls, multi-window support, scope/engineer modes
 
 ## Data Flow
@@ -17,67 +17,95 @@ The system has four major subsystems:
 Input Sources                    GPU Pipeline                         Display
 ─────────────                    ────────────                         ───────
                                  ┌─────────────────┐
-Oscilloscope ─┐                  │  Beam Write Pass │
+Oscilloscope ─┐                  │  Beam Write      │
 Audio File   ─┤→ BeamSample → → │  (compute)       │
-Vector List  ─┤   Ring Buffer    │  Gaussian splat  │
-External     ─┘                  │  into spectral   │
-                                 │  accum textures  │
+Vector List  ─┤   arc-length    │  Gaussian splat  │
+External     ─┘   resampled     │  into scalar     │
+                                 │  accum layers    │
                                  └────────┬─────────┘
                                           │
                                  ┌────────▼─────────┐
-                                 │  Decay Pass       │
-                                 │  (compute)        │
-                                 │  per-texel        │
-                                 │  exp(-dt/τ)       │
-                                 └────────┬─────────┘
-                                          │
-                                 ┌────────▼─────────┐
-                                 │  Tonemap Pass     │
-                                 │  (fragment)       │    ┌──────────┐
-                                 │  spectral → XYZ   │───→│ CRT      │
-                                 │  → sRGB → bloom   │    │ Viewport │
-                                 │  → glass → curve  │    └──────────┘
-                                 │  → tonemap        │
+                                 │  Spectral Resolve │
+                                 │  (fragment)       │
+                                 │  scalar × weights │
+                                 │  → CIE XYZ       │
+                                 │  → linear sRGB   │  ┌──────────┐
+                                 │  → HDR buffer    │  │          │
+                                 └────────┬─────────┘  │          │
+                                          │            │          │
+                                 ┌────────▼─────────┐  │          │
+                                 │  Decay            │  │          │
+                                 │  (compute)        │  │          │
+                                 │  tier 2: exp mul  │  │          │
+                                 │  tier 3: pow-law  │  │          │
+                                 │  tier 1: clear    │  │          │
+                                 └──────────────────┘  │          │
+                                                       │          │
+                                 ┌──────────────────┐  │          │
+                                 │  Faceplate        │  │          │
+                                 │  Scatter          │  │          │
+                                 │  (compute)        │  │          │
+                                 │  downsample       │  │          │
+                                 │  + blur H + V     │  │ CRT      │
+                                 └────────┬─────────┘  │ Viewport │
+                                          │            │          │
+                                 ┌────────▼─────────┐  │          │
+                                 │  Composite        │  │          │
+                                 │  (fragment)       │──│──────────│
+                                 │  HDR + scatter    │  │          │
+                                 │  → glass tint     │  │          │
+                                 │  → curvature      │  │          │
+                                 │  → tonemap        │  └──────────┘
                                  └───────────────────┘
 ```
 
 ## Key Design Decisions
 
-- **Accumulation buffer** over particle system: the phosphor screen state lives as GPU textures. Decay is embarrassingly parallel and cost is bounded by resolution, not beam activity.
-- **Spectral rendering** with compile-time configurable band count (`SPECTRAL_BANDS`, initially 16 at ~25nm). Not RGB — this matters for dual-layer phosphors where fluorescence and phosphorescence have different emission spectra.
-- **Individual egui/winit/wgpu components** instead of eframe: eframe's winit 0.30 dependency doesn't compile on Rust 1.93+. Manual integration gives us full pipeline control anyway.
+- **Scalar accumulation buffer** over spectral-per-layer textures: each decay term gets one scalar energy layer. Spectral weighting happens at resolve time via per-group emission weights, reducing VRAM from O(bands × terms) to O(terms).
+- **Three-tier hybrid decay** replaces uniform bi-exponential: instantaneous terms (τ < 100µs) are integrated analytically, slow exponentials use multiplicative decay, and power-law terms track per-texel elapsed time. This matches the actual physics — ZnS phosphors follow power-law kinetics, not exponential.
+- **Spectral rendering** with compile-time configurable band count (`SPECTRAL_BANDS`, 16 at ~25nm). Not RGB — this matters for dual-layer phosphors where fluorescence and phosphorescence have different emission spectra.
+- **Individual egui/winit/wgpu components** instead of eframe: manual integration gives us full pipeline control. egui 0.33 requires wgpu 27 and winit 0.30.
 - **Common BeamSample stream**: all four input modes produce the same `{ x, y, intensity, dt }` events, keeping the GPU pipeline input-agnostic.
+- **Arc-length resampling**: decouples energy deposition from input sample rate, preventing periodic brightness modulation along traces.
 
 ## Module Map
 
 ```
 src/
-  main.rs              — entry point, window creation, event loop
-  app.rs               — top-level App state
+  main.rs              — entry point, window creation, event loop, multi-window
+  app.rs               — InputState, per-mode state (oscilloscope, audio, vector, external)
+  types.rs             — Resolution type
   phosphor/
-    mod.rs             — phosphor database, PhosphorType struct
+    mod.rs             — phosphor database (compile-time baked + runtime loading)
     spectral.rs        — spectral band definitions, CIE integration weights
-    decay.rs           — multi-exponential decay fitting
   beam/
-    mod.rs             — BeamSample, sample ring buffer
+    mod.rs             — BeamSample, BeamSource trait, SPSC sample channel
     oscilloscope.rs    — signal generators
     vector.rs          — display list input
-    audio.rs           — audio file decoding, L/R → X/Y
-    external.rs        — pipe/socket protocol parser
+    audio.rs           — audio file decoding via symphonia, L/R → X/Y
+    external.rs        — pipe/socket protocol parser (nom-based)
+    resample.rs        — arc-length resampling for uniform beam energy deposition
   gpu/
-    mod.rs             — wgpu device/queue setup, pipeline orchestration
-    accumulation.rs    — accumulation buffer management
-    beam_write.wgsl    — compute shader: splat beam hits
-    decay.wgsl         — compute shader: exponential decay
-    tonemap.wgsl       — fragment shader: spectral → display
+    mod.rs             — GpuState: device/queue setup, pipeline orchestration, render loop
+    accumulation.rs    — flat storage buffer, HdrBuffer, layer count computation
+    beam_write.rs/.wgsl — compute: Gaussian splat into scalar accumulation layers
+    decay.rs/.wgsl     — compute: three-tier decay (exp + power-law + instant clear)
+    spectral_resolve.rs/.wgsl — fragment: scalar layers × emission weights → CIE XYZ → sRGB
+    faceplate_scatter.rs + 2 .wgsl — compute: downsample + separable Gaussian blur
+    composite.rs/.wgsl — fragment: HDR + scatter → glass/curvature/tonemap → display
+    profiler.rs        — GPU timestamp query profiler, timing history
   ui/
-    mod.rs             — egui integration, window management
-    scope_panel.rs     — scope-style controls
-    engineer_panel.rs  — physics parameter controls
-    viewport.rs        — CRT viewport widget, graticule overlay
+    mod.rs             — UiState, egui integration, combined/detached window management
+    scope_panel.rs     — scope-style controls (phosphor, input mode, intensity, focus)
+    engineer_panel.rs  — physics parameter controls, emission spectrum plot, GPU timing plot
+crates/
+  cie-data/            — CIE 1931 2° observer data (compile-time)
+  phosphor-data/       — PhosphorType, PhosphorLayer, DecayTerm, spectral utilities, TOML loading
+  phosphor-data-macro/ — proc macro that bakes data/phosphors.toml into a static array
 ```
 
 ## Threading Model
 
-- **Main thread**: winit event loop, egui rendering, GPU command submission
-- **Input thread**: runs active input source, pushes BeamSamples into a double-buffered ring buffer decoupled from frame rate
+- **Main thread**: winit event loop, egui rendering, GPU command submission, beam sample generation
+- Input sources run synchronously on the main thread during `RedrawRequested`
+- SPSC ring buffer (`rtrb`) available for future threaded input sources

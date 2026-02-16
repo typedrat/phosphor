@@ -2,28 +2,26 @@
 
 ## Framework
 
-egui with manual winit + wgpu integration (not eframe). We own the event loop and wgpu pipeline, and render egui as an overlay pass after our custom CRT rendering.
+egui with manual winit + wgpu integration (not eframe). We own the event loop and wgpu pipeline, and render egui as an overlay pass after the CRT composite pipeline.
 
 ## Window Layouts
 
-Three modes, switchable via hotkey or menu:
-
 ### Combined (default)
 
-Single OS window. The CRT viewport takes the majority of the space, with an egui side panel (resizable) for controls.
+Single OS window. The CRT viewport takes the majority of the space, with an egui side panel (resizable, hideable) for controls. The panel can be toggled with the hamburger button.
 
 ### Detached
 
-Two OS windows sharing the same process:
+Two OS windows sharing the same wgpu device/queue:
 
-- **CRT Viewport window**: Pure render output, can be fullscreened on any monitor (e.g., a TV).
-- **Controls window**: egui-only window with all the control panels.
+- **CRT Viewport window**: Pure GPU render output, can be fullscreened on any monitor.
+- **Controls window**: egui-only window with all the control panels, using a separate surface and egui renderer with shared `egui::Context`.
 
-Both windows share the same `Arc<Mutex<AppState>>`. The viewport window runs the wgpu render pipeline; the controls window is a lightweight egui-only surface. Toggle with `Ctrl+D`.
+Toggle with `Ctrl+D`. Closing the controls window recombines into the main window.
 
 ### Fullscreen
 
-CRT viewport fills the entire screen. Controls hidden. Hotkey (e.g., `Escape` or `Ctrl+D`) to return to combined mode.
+CRT viewport fills the entire screen. Toggle with `Ctrl+F`.
 
 ## Control Panel
 
@@ -33,9 +31,9 @@ Two tabs:
 
 User-facing controls that map to real oscilloscope/CRT concepts:
 
-- **Phosphor type selector**: Dropdown listing all phosphor types (P1, P2, P7, P11, P31, etc.) with their color description.
+- **Phosphor type selector**: Dropdown listing all phosphor types with their color description.
 - **Input mode selector**: Radio buttons — Oscilloscope, Audio, Vector, External.
-- **Intensity knob**: Beam current. Maps to energy deposition rate.
+- **Intensity knob**: Beam current. Maps to exposure in the composite pipeline.
 - **Focus knob**: Spot size (σ_core).
 
 **Per-input-mode controls** (shown/hidden based on selected mode):
@@ -44,19 +42,18 @@ _Oscilloscope:_
 
 - X channel: waveform type, frequency, amplitude, phase, DC offset
 - Y channel: same
-- Timebase (simulated time / real time)
+- Sample rate
 
 _Audio:_
 
-- File picker button (opens native file dialog via `rfd` or `egui_extras`)
-- Waveform scrubber / seek bar
-- Transport: play, pause, stop, loop toggle
-- Timebase / speed
+- File picker button (native dialog via rfd)
+- Transport: play/pause, loop toggle
+- Speed control
 
 _Vector:_
 
-- Load display list (file picker)
-- Refresh rate / loop toggle
+- File picker button (native dialog via rfd)
+- Beam speed, settling time, loop toggle
 
 _External:_
 
@@ -64,47 +61,63 @@ _External:_
 - Socket path (text field, only in socket mode)
 - Connection status indicator
 
-**Graticule toggle**: On/off for the 8×10 grid overlay (oscilloscope mode only).
-
 ### Engineer Mode Tab
 
 Raw physics parameters for tuning and experimentation:
+
+**Phosphor:**
+
+- Phosphor type selector (shared with scope mode)
+- Emission spectrum plot (fluorescence + phosphorescence if dual-layer)
+- Decay terms display: read-only summary showing each term's type, tier classification (T1/T2/T3), amplitude, and time constant
+- Buffer layer count
 
 **Beam:**
 
 - σ_core (spot core width)
 - σ_halo (spot halo width)
 - Halo fraction (h)
-- Space charge coefficient (k)
+- Space charge coefficient
 - Acceleration voltage (kV)
 
-**Phosphor (per-layer overrides):**
+**Faceplate Scatter:**
 
-- τ_fast, τ_slow
-- A_fast / A_slow ratio
-- Spectral emission curve viewer (small bar chart of the 16 band weights)
+- Threshold (minimum brightness to bloom)
+- Sigma (blur radius)
+- Intensity (blend weight)
 
 **Display pipeline:**
 
-- Glass tint (RGB color picker)
-- Halation bloom radius and intensity
-- Screen curvature radius
-- Edge falloff strength
-- Tonemap curve selector (Reinhard / Filmic / Exposure)
-- Tonemap parameters (exposure, white point)
+- Tonemap curve selector (Reinhard / ACES / Clamp / None/HDR)
+- Exposure
+- White point
+
+**Glass Faceplate:**
+
+- Tint (RGB color picker)
+- Curvature
+- Edge falloff
 
 **Accumulation buffer:**
 
-- Resolution multiplier (0.5x, 1x, 2x)
-- Precision threshold (minimum energy before zeroing)
+- Resolution multiplier (0.25x–2x)
+- Current resolution display
 
 **Performance:**
 
 - FPS counter
-- GPU time per pass (beam write, decay, tonemap)
+- GPU time per pass (Beam Write, Spectral Resolve, Decay, Faceplate Scatter, Composite)
 - Beam samples per frame
-- Active texel count (non-zero)
+- Stacked timing history plot with per-pass color coding
 
 ## egui Rendering Integration
 
-The CRT simulation renders to the swapchain via our custom wgpu pipeline (beam write → decay → tonemap). egui then renders on top as an overlay — the side panel and any floating UI elements are composited over the CRT output. This is the standard approach for mixing egui with a custom 3D/GPU view: egui doesn't own the viewport, it just draws its UI on top. In detached mode, the viewport window skips egui entirely — pure wgpu output only.
+The CRT simulation renders to the swapchain via the custom wgpu pipeline (beam write → spectral resolve → decay → faceplate scatter → composite). egui then renders on top as an overlay — the side panel and any floating UI elements are composited over the CRT output. The render pass uses `LoadOp::Load` to preserve the CRT image underneath. In detached mode, the viewport window skips egui entirely — pure wgpu output only. The controls window uses its own egui renderer and surface with a `LoadOp::Clear`.
+
+## Keyboard Shortcuts
+
+| Key      | Action                          |
+| -------- | ------------------------------- |
+| `Ctrl+D` | Toggle detached controls window |
+| `Ctrl+F` | Toggle fullscreen               |
+| `Ctrl+Q` | Quit                            |

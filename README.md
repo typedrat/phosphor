@@ -6,15 +6,18 @@ A physically-based X-Y CRT simulator in Rust. Rather than approximating the visu
 
 ## Features
 
-- **Spectral phosphor model** — 16-band spectral representation (380–780nm) with multi-exponential decay fitted to real Tektronix CRT data
-- **Dual-layer phosphors** — Supports phosphors with distinct fluorescence and phosphorescence characteristics (P2, P7, P14, etc.)
-- **GPU accumulation buffer** — Beam write, decay, and tonemapping run entirely on the GPU via wgpu compute/fragment shaders
+- **Spectral phosphor model** — 16-band spectral representation (380–780nm) with CIE 1931 colorimetry
+- **Three-tier hybrid decay** — Instantaneous exponentials (tier 1), slow multiplicative exponentials (tier 2), and power-law decay from bimolecular recombination (tier 3), based on Kuhn (2002) PMT measurements
+- **Dual-layer phosphors** — Supports phosphors with distinct fluorescence and phosphorescence (P2, P7, P14, etc.) with independent emission spectra and decay terms
+- **GPU accumulation buffer** — Scalar-layer storage buffer with beam write, spectral resolve, decay, faceplate scatter, and composite passes running entirely on the GPU via wgpu compute/fragment shaders
 - **Multiple input modes:**
   - Built-in oscilloscope signal generators (sine, triangle, square, sawtooth, noise)
   - Stereo audio files as X/Y input (oscilloscope music)
-  - Vector display lists
+  - Vector display lists (JSON)
   - External protocol over stdin/Unix socket
-- **CRT display effects** — Bloom/halation, glass tint, screen curvature, edge falloff, filmic tonemapping
+- **CRT display effects** — Faceplate scatter/halation, glass tint, screen curvature, edge falloff, tonemapping (Reinhard, ACES, Clamp, HDR passthrough)
+- **HDR output** — Automatic Rgba16Float surface when the display supports it
+- **GPU profiling** — Per-pass timestamp queries with timing history plots
 
 ## Building
 
@@ -44,7 +47,7 @@ Load a stereo audio file (WAV, FLAC, OGG, MP3) where the left channel drives X a
 
 ### Vector
 
-A display list of line segments with per-segment intensity control.
+A display list of line segments with per-segment intensity control, loaded from JSON files.
 
 ### External
 
@@ -58,7 +61,15 @@ F                        # end frame
 
 ## Phosphor Types
 
-Phosphor definitions are based on the 1966 Tektronix CRT Data sheets (included in `docs/crt-info/`). Supported types include P1, P2, P7, P11, P31, and others.
+Phosphor definitions are based on the 1966 Tektronix CRT Data sheets (included in `docs/crt-info/`). Supported types include P1, P2, P3, P4, P7, P11, P14, P15, P17, P20, P24, P31, P32, and others. Each phosphor has physically measured decay parameters — bi-exponential (Selomulya 2003) for silicate phosphors, power-law + fast exponentials (Kuhn 2002) for ZnS-based phosphors.
+
+## Keyboard Shortcuts
+
+| Key      | Action                          |
+| -------- | ------------------------------- |
+| `Ctrl+D` | Toggle detached controls window |
+| `Ctrl+F` | Toggle fullscreen               |
+| `Ctrl+Q` | Quit                            |
 
 ## License
 

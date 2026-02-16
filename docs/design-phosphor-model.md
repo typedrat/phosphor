@@ -2,106 +2,105 @@
 
 ## Phosphor Type Database
 
-Each JEDEC-registered phosphor type (P1, P2, P7, P11, P31, etc.) is defined as a Rust struct containing all physical parameters needed for simulation. The database is compiled into the binary from the Tektronix CRT Data reference tables in `docs/`.
+Each JEDEC-registered phosphor type (P1, P2, P7, P11, P31, etc.) is defined as a Rust struct containing all physical parameters needed for simulation. The database is defined in `data/phosphors.toml` and baked into the binary at compile time via a proc macro.
 
 ### Per-Layer Data
 
-Each phosphor has 1-2 layers. Single-layer phosphors (P1, P11, P31) have identical fluorescence and phosphorescence colors. Dual-layer phosphors (P2, P7, P14, marked with `*` in the reference tables) have physically separate layers with distinct emission spectra and decay characteristics.
+Each phosphor has 1–2 layers. Single-layer phosphors (P1, P11, P31) have identical fluorescence and phosphorescence colors. Dual-layer phosphors (P2, P7, P14) have physically separate layers with distinct emission spectra and decay characteristics.
 
 ```rust
-struct PhosphorLayer {
-    /// Spectral emission weights across SPECTRAL_BANDS.
-    /// Normalized so the sum = 1.0. Derived from the phosphor compound's
-    /// emission spectrum, sampled and integrated into each band.
-    emission_weights: [f32; SPECTRAL_BANDS],
+pub enum DecayTerm {
+    Exponential { amplitude: f32, tau: f32 },
+    PowerLaw { amplitude: f32, alpha: f32, beta: f32 },
+}
 
-    /// Two-term exponential decay: I(t) = a_fast * exp(-t/tau_fast) + a_slow * exp(-t/tau_slow)
-    /// Fitted to match the Tektronix decay data (time to 10%, 1%, 0.1% of initial).
-    tau_fast: f32,       // seconds
-    tau_slow: f32,       // seconds
-    a_fast: f32,         // amplitude weight of fast component (a_fast + a_slow = 1.0)
-    a_slow: f32,         // amplitude weight of slow component
+pub struct PhosphorLayer {
+    pub emission_weights: [f32; SPECTRAL_BANDS],
+    pub decay_terms: Vec<DecayTerm>,  // max 8 terms
 }
 ```
 
 ### Per-Phosphor Data
 
 ```rust
-struct PhosphorType {
-    designation: &'static str,     // "P1", "P7", etc.
-    category: PhosphorCategory,    // GeneralPurpose, ShortDecay, VideoDisplay, LongDecay, etc.
-    is_dual_layer: bool,
+pub struct PhosphorType {
+    pub designation: String,          // "P1", "P7", etc.
+    pub description: String,
+    pub category: PhosphorCategory,
+    pub is_dual_layer: bool,
 
-    fluorescence: PhosphorLayer,   // always present — the fast initial emission
-    phosphorescence: PhosphorLayer, // for single-layer, same emission weights but separate decay
+    pub fluorescence: PhosphorLayer,
+    pub phosphorescence: PhosphorLayer,
 
-    peak_wavelength_nm: f32,       // dominant emission wavelength
-    relative_luminance: f32,       // from reference table (P31 = 100%)
-    relative_writing_speed: f32,   // from reference table (P11 = 100%)
+    pub peak_wavelength_nm: f32,
+    pub relative_luminance: f32,
+    pub relative_writing_speed: f32,
 }
 ```
 
 ## Spectral Emission Curves
 
-The emission weights per band are derived from the known phosphor compounds:
+The emission weights per band are derived from the known phosphor compounds, approximated as Gaussians centered on the peak wavelength with the appropriate FWHM, then integrated and normalized across `SPECTRAL_BANDS` bins:
 
-| Phosphor | Compound                                           | Peak λ | Emission Character                        |
-| -------- | -------------------------------------------------- | ------ | ----------------------------------------- |
-| P1       | ZnSiO₄:Mn (willemite)                              | 520nm  | Broad green, ~40nm FWHM                   |
-| P2       | ZnS:Cu (fluorescence) + ZnCdS:Cu (phosphorescence) | 510nm  | Blue-green flash → yellow-green afterglow |
-| P7       | ZnS:Ag (fluorescence) + ZnCdS:Cu (phosphorescence) | 450nm  | Blue-white flash → yellow-green afterglow |
-| P11      | ZnS:Ag                                             | 450nm  | Narrow violet-blue, ~25nm FWHM            |
-| P31      | ZnS:Cu                                             | 530nm  | Broad green, ~50nm FWHM                   |
+| Phosphor | Compound                      | Peak λ | FWHM  | Emission Character                        |
+| -------- | ----------------------------- | ------ | ----- | ----------------------------------------- |
+| P1       | ZnSiO₄:Mn (willemite)         | 520nm  | ~40nm | Broad green                               |
+| P2       | ZnS:Cu (fl.) + ZnCdS:Cu (ph.) | 510nm  | —     | Blue-green flash → yellow-green afterglow |
+| P7       | ZnS:Ag (fl.) + ZnCdS:Cu (ph.) | 450nm  | —     | Blue-white flash → yellow-green afterglow |
+| P11      | ZnS:Ag                        | 450nm  | ~25nm | Narrow violet-blue                        |
+| P31      | ZnS:Cu                        | 530nm  | ~50nm | Broad green                               |
 
-For each compound, we approximate the emission as a Gaussian centered on the peak wavelength with the appropriate FWHM, then integrate into `SPECTRAL_BANDS` bins. For dual-layer phosphors, the two layers have independent Gaussian profiles at different peaks.
+## Three-Tier Hybrid Decay Model
 
-Where published CIE spectral data is available for a compound, we use that directly. Otherwise, the Gaussian approximation is sufficient — most phosphor emissions are smooth, broad peaks.
+The uniform bi-exponential model is physically wrong for ZnS-based phosphors, which exhibit **inverse power-law decay** from bimolecular donor-acceptor pair recombination. Only Mn²⁺-activated silicates (P1, P3) are legitimately bi-exponential.
 
-## Decay Fitting
+### Decay Kinetics by Phosphor Class
 
-The Tektronix Phosphor Decay Table (Rev A, 1966) provides three data points per phosphor:
+| Class           | Phosphors    | Mechanism                               | Functional Form          |
+| --------------- | ------------ | --------------------------------------- | ------------------------ |
+| Silicate (Mn²⁺) | P1, P3       | Two Mn²⁺ crystallographic sites         | Bi-exponential           |
+| ZnS:Ag          | P11          | Bimolecular DAP recombination           | Power-law + exponentials |
+| ZnS:Cu          | P31          | Bimolecular DAP recombination           | Power-law + exponentials |
+| ZnS:Cu,Ag       | P2           | Mixed                                   | Inverse power-law        |
+| Y₂O₂S:Eu        | P22R         | Multi-site exponential                  | Sum of exponentials      |
+| ZnO:Zn          | P15, P24     | Near-exponential                        | Fast single exponential  |
+| Cascade         | P7, P14, P17 | Dual-layer: fast flash + slow afterglow | Two-component            |
 
-- Time to decay to 10% of initial intensity
-- Time to decay to 1%
-- Time to decay to 0.1%
+### Key Data Sources
 
-We fit a two-term exponential `I(t) = A₁·exp(-t/τ₁) + A₂·exp(-t/τ₂)` where `A₁ + A₂ = 1` to these three points using least-squares. This captures:
+- **Kuhn (2002)**: 5 GHz PMT impulse response of P22 RGB, fitted as hybrid power-law + exponential models.
+- **Selomulya et al. (2003)**: Mn²⁺ thin-film decay for P1: τ₁ = 2.88 ms, τ₂ = 15.1 ms, A₁/A₂ = 6.72.
+- **Tektronix (1966)**: CRT Phosphor Data sheets — 10%, 1%, 0.1% decay times used to constrain power-law parameters where Kuhn-quality data is unavailable.
 
-- The fast initial drop (dominated by `τ₁`)
-- The slow phosphorescent tail (dominated by `τ₂`)
+### Three Tiers
 
-### Reference Decay Data (from Tektronix tables)
+**Tier 1 — Instantaneous (τ < 100µs):** Exponential terms that decay to zero within a single frame at 60fps. Their time-integrated emission `∫₀^∞ A·exp(-t/τ) dt = A·τ` is computed analytically during beam write and deposited as a one-frame scalar. No persistent buffer state needed.
 
-**General Purpose:**
-| Type | 10% | 1% | 0.1% |
-|------|-----|----|------|
-| P1 | 27ms | 60ms | 95ms |
-| P20 | 230µs | 2300µs | 11,000µs |
-| P31 | 340µs | 4500µs | 32,000µs |
+**Tier 2 — Slow Exponential (τ ≥ 100µs):** Multiplicative decay in the accumulation buffer via `value *= exp(-dt/τ)` per frame. Exact and cheap. One scalar layer per term.
 
-**Short Decay:**
-| Type | 10% | 1% | 0.1% |
-|------|-----|----|------|
-| P15 | 2µs | 12µs | 50µs |
-| P16 | 1.1µs | 75µs | — |
-| P24 | 18µs | 137µs | 590µs |
+**Tier 3 — Power-Law:** For ZnS-based phosphors: `I(t) = peak * (α/(t+α))^β`. Uses a scalar peak-energy layer and an elapsed-time layer. When `peak * (α/(elapsed+α))^β < threshold`, the texel is zeroed to save compute. On revisit, elapsed time resets and peak energy is deposited fresh.
 
-**Video Display:**
-| Type | 10% | 1% | 0.1% |
-|------|-----|----|------|
-| P3 | 19ms | 45ms | 74ms |
-| P4† | 320µs | 3300µs | 20,000µs |
-| P6† | 330µs | 3300µs | 18,000µs |
+### Example Phosphor Data
 
-**Long Decay — Sulfide:**
-| Type | 10% | 1% | 0.1% |
-|------|-----|----|------|
-| P2 | 370µs | 4700µs | 51,000µs |
-| P7* | 305µs | 5700µs | 66,000µs |
-| P14* | 440µs | 6700µs | 55,000µs |
-| P17\* | 130µs | 8700µs | 82,500µs |
+**P1 (Zn₂SiO₄:Mn) — Bi-exponential (Selomulya 2003):**
 
-`*` = double-layer screen. `†` = mixed phosphor.
+| Term | Type        | Amplitude | τ       |
+| ---- | ----------- | --------- | ------- |
+| 1    | exponential | 6.72      | 2.88 ms |
+| 2    | exponential | 1.0       | 15.1 ms |
+
+Both terms are tier 2 (slow). Buffer: 2 scalar layers.
+
+**P31 ≈ P22 Green (ZnS:Cu,Al) — Power-law + 3 exponentials (Kuhn 2002):**
+
+| Term | Type        | Amplitude | τ / α      | β   |
+| ---- | ----------- | --------- | ---------- | --- |
+| 1    | power_law   | 2.1e-4    | α = 5.5 µs | 1.1 |
+| 2    | exponential | 90.0      | 31.8 ns    | —   |
+| 3    | exponential | 100.0     | 227 ns     | —   |
+| 4    | exponential | 37.0      | 1.06 µs    | —   |
+
+Terms 2–4 are tier 1 (instantaneous). Term 1 is tier 3 (power-law). Buffer: 3 layers (peak + elapsed + instant).
 
 ## Dual-Layer Behavior
 
@@ -109,6 +108,8 @@ For dual-layer phosphors (P2, P7, P14, etc.), the two layers are physically dist
 
 1. **Front layer** (facing the electron gun): Fast-decay fluorescent layer. Emits immediately when struck by electrons, decays quickly. Typically a blue or blue-white emitter (ZnS:Ag for P7).
 
-2. **Back layer** (on the glass): Slow-decay phosphorescent layer. Excited by UV/light from the front layer, not directly by electrons. Decays slowly. Typically a yellow-green emitter (ZnCdS:Cu for P7).
+2. **Back layer** (on the glass): Slow-decay phosphorescent layer. Excited by UV/light from the front layer. Decays slowly. Typically a yellow-green emitter (ZnCdS:Cu for P7).
 
-In our model, both layers receive energy simultaneously when the beam hits (the front layer excites the back layer essentially instantaneously). Each layer then decays according to its own time constants and emits its own spectral profile. The visible result is the sum of both layers' emissions at any given time — producing the characteristic color shift from blue-white to yellow-green as P7 decays.
+Both layers receive energy simultaneously when the beam hits. Each layer then decays according to its own terms and emits its own spectral profile. The visible result is the sum of both layers' emissions — producing the characteristic color shift from blue-white to yellow-green as P7 decays.
+
+In the GPU pipeline, dual-layer phosphors use two emission groups in `SpectralResolveParams`, each with its own spectral weights and layer indices.
