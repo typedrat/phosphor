@@ -181,8 +181,12 @@ impl App {
                 gpu.beam_params.sigma_halo = eng.sigma_halo;
                 gpu.beam_params.halo_fraction = eng.halo_fraction;
 
-                // Decay -- phosphor type sets defaults, engineer can override
-                gpu.decay_params = gpu::decay::DecayParams::new(eng.tau_fast, eng.tau_slow);
+                // Decay — terms come from the phosphor, not engineer sliders
+                // TODO(Task 10): Full wiring via switch_phosphor()
+                gpu.decay_params = gpu::decay::DecayParams::from_terms(
+                    &phosphor.fluorescence.decay_terms,
+                    gpu::TAU_CUTOFF,
+                );
                 gpu.emission_params = gpu::beam_write::EmissionParams::new(
                     &phosphor.fluorescence.emission_weights,
                     eng.a_fast,

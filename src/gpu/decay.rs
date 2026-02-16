@@ -4,22 +4,78 @@ use wgpu::util::DeviceExt;
 use super::SPECTRAL_CONSTANTS;
 use super::accumulation::AccumulationBuffer;
 
+pub const MAX_DECAY_TERMS: usize = 8;
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct DecayTermGpu {
+    pub amplitude: f32,
+    pub param1: f32,    // tau (exp) or alpha (power_law)
+    pub param2: f32,    // 0.0 (exp) or beta (power_law)
+    pub type_flag: f32, // 0.0 = exponential, 1.0 = power_law
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct DecayParams {
     pub dt: f32,
     pub threshold: f32,
-    pub tau_fast: f32,
-    pub tau_slow: f32,
+    pub tau_cutoff: f32,
+    pub term_count: u32,
+    pub terms: [DecayTermGpu; MAX_DECAY_TERMS],
+    pub slow_exp_count: u32,
+    pub has_power_law: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
 }
 
 impl DecayParams {
-    pub fn new(tau_fast: f32, tau_slow: f32) -> Self {
+    pub fn from_terms(terms: &[phosphor_data::DecayTerm], tau_cutoff: f32) -> Self {
+        let mut gpu_terms = [DecayTermGpu::zeroed(); MAX_DECAY_TERMS];
+        let class = phosphor_data::classify_decay_terms(terms, tau_cutoff);
+
+        // Pack slow exponentials first (tier 2), then power-law (tier 3)
+        let mut idx = 0;
+        for term in terms {
+            if let phosphor_data::DecayTerm::Exponential { amplitude, tau } = term {
+                if *tau >= tau_cutoff {
+                    gpu_terms[idx] = DecayTermGpu {
+                        amplitude: *amplitude,
+                        param1: *tau,
+                        param2: 0.0,
+                        type_flag: 0.0,
+                    };
+                    idx += 1;
+                }
+            }
+        }
+        for term in terms {
+            if let phosphor_data::DecayTerm::PowerLaw {
+                amplitude,
+                alpha,
+                beta,
+            } = term
+            {
+                gpu_terms[idx] = DecayTermGpu {
+                    amplitude: *amplitude,
+                    param1: *alpha,
+                    param2: *beta,
+                    type_flag: 1.0,
+                };
+                idx += 1;
+            }
+        }
+
         Self {
             dt: 0.0,
             threshold: 1e-6,
-            tau_fast,
-            tau_slow,
+            tau_cutoff,
+            term_count: idx as u32,
+            terms: gpu_terms,
+            slow_exp_count: class.slow_exp_count as u32,
+            has_power_law: if class.has_power_law { 1 } else { 0 },
+            _pad0: 0,
+            _pad1: 0,
         }
     }
 

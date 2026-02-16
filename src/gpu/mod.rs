@@ -167,8 +167,19 @@ impl GpuState {
 
         let decay = DecayPipeline::new(&device);
 
-        // Default P1 green phosphor decay — ~12ms fast, ~40ms slow
-        let decay_params = DecayParams::new(0.012, 0.040);
+        // Default P1 green phosphor decay (Selomulya bi-exponential).
+        // Will be recalculated on phosphor switch via switch_phosphor().
+        let default_terms = &[
+            phosphor_data::DecayTerm::Exponential {
+                amplitude: 6.72,
+                tau: 0.00288,
+            },
+            phosphor_data::DecayTerm::Exponential {
+                amplitude: 1.0,
+                tau: 0.0151,
+            },
+        ];
+        let decay_params = DecayParams::from_terms(default_terms, TAU_CUTOFF);
 
         let hdr = HdrBuffer::new(&device, buffer_res);
 
