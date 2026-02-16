@@ -1,26 +1,33 @@
 // Spectral Resolve Fragment Shader
 //
-// Stage 1 of the display pipeline. Reads the spectral accumulation buffer,
-// integrates energy per band against CIE 1931 color matching functions
-// to produce XYZ tristimulus values, converts to linear sRGB, and applies
-// gamut mapping. Outputs unbounded linear HDR RGB to an intermediate texture.
+// Reads scalar energy from the accumulation buffer (one value per decay term),
+// distributes across spectral bands using shared emission weights per group,
+// integrates against CIE 1931 color matching functions, and converts to linear
+// sRGB with gamut mapping.
 
 override SPECTRAL_BANDS: u32 = 16u;
 
+struct EmissionGroupGpu {
+    weights: array<vec4<f32>, 4>,
+    slow_exp_start: u32,
+    slow_exp_count: u32,
+    has_power_law: u32,
+    power_law_layer: u32,
+    elapsed_layer: u32,
+    has_instant: u32,
+    instant_layer: u32,
+    _pad: u32,
+}
+
 struct SpectralResolveParams {
-    // CIE 1931 color matching function weights per spectral band,
-    // packed as 4 vec4s per channel (4 bands per vec4).
     cie_x: array<vec4<f32>, 4>,
     cie_y: array<vec4<f32>, 4>,
     cie_z: array<vec4<f32>, 4>,
-    slow_exp_count: u32,
-    has_power_law: u32,
+    group_count: u32,
     power_law_alpha: f32,
     power_law_beta: f32,
-    has_instant: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    _pad: u32,
+    groups: array<EmissionGroupGpu, 2>,
 }
 
 struct AccumDims {
@@ -47,8 +54,6 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
 }
 
-// Full-screen triangle: 3 vertices covering the entire clip space.
-// No vertex buffer needed — positions generated from vertex index.
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var out: VertexOutput;
@@ -68,9 +73,13 @@ fn get_cie_weight(channel: u32, band: u32) -> f32 {
     }
 }
 
+fn get_group_weight(group_idx: u32, band: u32) -> f32 {
+    let vec_idx = band / 4u;
+    let comp_idx = band % 4u;
+    return params.groups[group_idx].weights[vec_idx][comp_idx];
+}
+
 // Luminance-preserving desaturation for out-of-gamut colors.
-// Moves toward the achromatic (luminance) axis until all channels are >= 0.
-// Uses CIE Y (true photopic luminance from spectral integration).
 fn gamut_map(rgb: vec3<f32>, luminance: f32) -> vec3<f32> {
     if luminance <= 0.0 {
         return vec3<f32>(0.0);
@@ -87,42 +96,45 @@ fn gamut_map(rgb: vec3<f32>, luminance: f32) -> vec3<f32> {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let coord = vec2<i32>(in.position.xy);
 
-    // Integrate spectral energy to CIE XYZ
     var X = 0.0;
     var Y = 0.0;
     var Z = 0.0;
 
-    for (var band = 0u; band < SPECTRAL_BANDS; band++) {
-        var energy = 0.0;
+    for (var g = 0u; g < params.group_count; g++) {
+        let group = params.groups[g];
 
-        // Tier 2: sum slow exponential layers for this band
-        for (var term = 0u; term < params.slow_exp_count; term++) {
-            energy += load_accum(coord.x, coord.y, term * SPECTRAL_BANDS + band);
+        // Sum scalar energies across all tiers for this emission group
+        var group_energy = 0.0;
+
+        // Tier 2: slow exponential terms (one scalar each)
+        for (var i = 0u; i < group.slow_exp_count; i++) {
+            group_energy += load_accum(coord.x, coord.y, group.slow_exp_start + i);
         }
 
-        // Tier 3: power-law contribution from stored peak and elapsed time
-        if params.has_power_law == 1u {
-            let pl_base = params.slow_exp_count * SPECTRAL_BANDS;
-            let peak = load_accum(coord.x, coord.y, pl_base + band);
+        // Tier 3: power-law from scalar peak and elapsed time
+        if group.has_power_law == 1u {
+            let peak = load_accum(coord.x, coord.y, group.power_law_layer);
             if peak > 0.0 {
-                let time_layer = pl_base + SPECTRAL_BANDS;
-                let elapsed = load_accum(coord.x, coord.y, time_layer);
-                energy += peak * pow(
+                let elapsed = load_accum(coord.x, coord.y, group.elapsed_layer);
+                group_energy += peak * pow(
                     params.power_law_alpha / (elapsed + params.power_law_alpha),
                     params.power_law_beta);
             }
         }
 
-        // Tier 1: instantaneous emission (one-frame spectral data)
-        if params.has_instant == 1u {
-            let inst_base = params.slow_exp_count * SPECTRAL_BANDS
-                + select(0u, SPECTRAL_BANDS + 1u, params.has_power_law == 1u);
-            energy += load_accum(coord.x, coord.y, inst_base + band);
+        // Tier 1: instantaneous emission (one-frame scalar)
+        if group.has_instant == 1u {
+            group_energy += load_accum(coord.x, coord.y, group.instant_layer);
         }
 
-        X += energy * get_cie_weight(0u, band);
-        Y += energy * get_cie_weight(1u, band);
-        Z += energy * get_cie_weight(2u, band);
+        // Distribute scalar energy across spectral bands using shared emission
+        // weights, then integrate against CIE color matching functions.
+        for (var band = 0u; band < SPECTRAL_BANDS; band++) {
+            let spectral_energy = group_energy * get_group_weight(g, band);
+            X += spectral_energy * get_cie_weight(0u, band);
+            Y += spectral_energy * get_cie_weight(1u, band);
+            Z += spectral_energy * get_cie_weight(2u, band);
+        }
     }
 
     // XYZ -> linear sRGB (IEC 61966-2-1)

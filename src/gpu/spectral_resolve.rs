@@ -6,6 +6,32 @@ use crate::phosphor::spectral::CIE_INTEGRATION_WEIGHTS;
 use super::SPECTRAL_CONSTANTS;
 use super::accumulation::{AccumulationBuffer, HdrBuffer};
 
+/// GPU-side emission group: a set of decay terms sharing an emission spectrum.
+/// Single-layer phosphors have 1 group; dual-layer phosphors have 2.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct EmissionGroupGpu {
+    /// Spectral emission weights packed as 4 vec4s (4 bands per vec4).
+    pub weights: [[f32; 4]; 4],
+    /// First tier-2 layer index in the accumulation buffer.
+    pub slow_exp_start: u32,
+    /// Number of tier-2 (slow exponential) terms in this group.
+    pub slow_exp_count: u32,
+    /// 1 if this group has a power-law term, 0 otherwise.
+    pub has_power_law: u32,
+    /// Layer index for tier-3 scalar peak energy (only valid if has_power_law).
+    pub power_law_layer: u32,
+    /// Layer index for tier-3 elapsed time (only valid if has_power_law).
+    pub elapsed_layer: u32,
+    /// 1 if this group has instantaneous emission, 0 otherwise.
+    pub has_instant: u32,
+    /// Layer index for tier-1 scalar instant energy (only valid if has_instant).
+    pub instant_layer: u32,
+    pub _pad: u32,
+}
+
+pub const MAX_EMISSION_GROUPS: usize = 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct SpectralResolveParams {
@@ -15,14 +41,15 @@ pub struct SpectralResolveParams {
     cie_y: [[f32; 4]; 4],
     /// CIE z_bar weights.
     cie_z: [[f32; 4]; 4],
-    pub slow_exp_count: u32,
-    pub has_power_law: u32,
+    /// Number of active emission groups (1 or 2).
+    pub group_count: u32,
+    /// Power-law alpha parameter (shared across groups).
     pub power_law_alpha: f32,
+    /// Power-law beta parameter (shared across groups).
     pub power_law_beta: f32,
-    pub has_instant: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    pub _pad: u32,
+    /// Emission groups (up to 2: fluorescence + phosphorescence).
+    pub groups: [EmissionGroupGpu; MAX_EMISSION_GROUPS],
 }
 
 impl SpectralResolveParams {
@@ -41,24 +68,58 @@ impl SpectralResolveParams {
             cie_x,
             cie_y,
             cie_z,
-            slow_exp_count: 2, // default for P1
-            has_power_law: 0,
+            group_count: 0,
             power_law_alpha: 0.0,
             power_law_beta: 0.0,
-            has_instant: 0,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            _pad: 0,
+            groups: [EmissionGroupGpu::zeroed(); MAX_EMISSION_GROUPS],
         }
     }
 
-    pub fn update_from_phosphor(&mut self, terms: &[phosphor_data::DecayTerm], tau_cutoff: f32) {
+    /// Reconfigure for a new phosphor. Builds emission group(s) from the
+    /// phosphor's layer(s) and decay term classification.
+    pub fn update_from_phosphor(
+        &mut self,
+        emission_weights: &[f32; 16],
+        terms: &[phosphor_data::DecayTerm],
+        tau_cutoff: f32,
+    ) {
         let class = phosphor_data::classify_decay_terms(terms, tau_cutoff);
-        self.slow_exp_count = class.slow_exp_count as u32;
-        self.has_power_law = if class.has_power_law { 1 } else { 0 };
-        self.has_instant = if class.instant_exp_count > 0 { 1 } else { 0 };
+
+        // Pack emission weights into 4×vec4
+        let mut packed_weights = [[0.0f32; 4]; 4];
+        for (i, &w) in emission_weights.iter().enumerate() {
+            packed_weights[i / 4][i % 4] = w;
+        }
+
+        // Compute layer indices for a single emission group.
+        // Layout: [slow_exp × 1] [power_law_peak, elapsed_time]? [instant]?
+        let mut layer = 0u32;
+
+        let slow_exp_start = layer;
+        layer += class.slow_exp_count as u32;
+
+        let (has_power_law, power_law_layer, elapsed_layer) = if class.has_power_law {
+            let pl = layer;
+            layer += 2; // peak + elapsed
+            (1u32, pl, pl + 1)
+        } else {
+            (0, 0, 0)
+        };
+
+        let (has_instant, instant_layer) = if class.instant_exp_count > 0 {
+            let il = layer;
+            layer += 1;
+            (1u32, il)
+        } else {
+            (0, 0)
+        };
+
+        let _ = layer; // total layers
 
         // Extract power-law params if present
+        self.power_law_alpha = 0.0;
+        self.power_law_beta = 0.0;
         for term in terms {
             if let phosphor_data::DecayTerm::PowerLaw { alpha, beta, .. } = term {
                 self.power_law_alpha = *alpha;
@@ -66,6 +127,20 @@ impl SpectralResolveParams {
                 break;
             }
         }
+
+        self.group_count = 1;
+        self.groups[0] = EmissionGroupGpu {
+            weights: packed_weights,
+            slow_exp_start,
+            slow_exp_count: class.slow_exp_count as u32,
+            has_power_law,
+            power_law_layer,
+            elapsed_layer,
+            has_instant,
+            instant_layer,
+            _pad: 0,
+        };
+        self.groups[1] = EmissionGroupGpu::zeroed();
     }
 }
 
