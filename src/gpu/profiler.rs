@@ -10,10 +10,10 @@ pub enum GpuQuery {
     FrameStart = 0,
     #[strum(serialize = "Beam Write")]
     AfterBeamWrite = 1,
-    #[strum(serialize = "Decay")]
-    AfterDecay = 2,
     #[strum(serialize = "Spectral Resolve")]
-    AfterSpectralResolve = 3,
+    AfterSpectralResolve = 2,
+    #[strum(serialize = "Decay")]
+    AfterDecay = 3,
     #[strum(serialize = "Faceplate Scatter")]
     AfterFaceplateScatter = 4,
     #[strum(serialize = "Composite")]
