@@ -147,14 +147,11 @@ impl GpuState {
 
         let buffer_res = Resolution::new(surface_config.width, surface_config.height);
 
-        // Default: P1 has 2 slow exponentials, no power law, no instant → 32 layers.
-        // Recalculated on phosphor switch via switch_phosphor().
-        let default_layers = accumulation::accum_layer_count(2, false, false);
-        let accum = AccumulationBuffer::new(&device, buffer_res, default_layers);
+        // Minimal defaults — overwritten by switch_phosphor() immediately after
+        // construction, which loads the real phosphor from the database.
+        let accum = AccumulationBuffer::new(&device, buffer_res, 1);
 
         let beam_write = BeamWritePipeline::new(&device);
-
-        // Default beam parameters — will be configurable via UI later
         let beam_params = BeamParams::new(
             1.5,  // sigma_core (pixels)
             6.0,  // sigma_halo (pixels)
@@ -164,31 +161,13 @@ impl GpuState {
         );
 
         let decay = DecayPipeline::new(&device);
-
-        // Default P1 green phosphor decay (Selomulya bi-exponential).
-        // Will be recalculated on phosphor switch via switch_phosphor().
-        let default_terms = &[
-            phosphor_data::DecayTerm::Exponential {
-                amplitude: 6.72,
-                tau: 0.00288,
-            },
-            phosphor_data::DecayTerm::Exponential {
-                amplitude: 1.0,
-                tau: 0.0151,
-            },
-        ];
-        let decay_params = DecayParams::from_terms(default_terms, TAU_CUTOFF);
-
-        // Default P1 green phosphor emission
-        let emission_params = EmissionParams::from_phosphor(default_terms, TAU_CUTOFF);
+        let decay_params = DecayParams::from_terms(&[], TAU_CUTOFF);
+        let emission_params = EmissionParams::from_phosphor(&[], TAU_CUTOFF);
 
         let hdr = HdrBuffer::new(&device, buffer_res);
 
         let spectral_resolve = SpectralResolvePipeline::new(&device);
-        let mut spectral_resolve_params = SpectralResolveParams::new();
-        // Safe default: flat emission spectrum, will be overridden on first
-        // phosphor switch from the UI.
-        spectral_resolve_params.update_from_phosphor(&[1.0 / 16.0; 16], default_terms, TAU_CUTOFF);
+        let spectral_resolve_params = SpectralResolveParams::new();
 
         let faceplate_scatter = FaceplateScatterPipeline::new(&device);
         let faceplate_scatter_textures = FaceplateScatterTextures::new(&device, buffer_res);

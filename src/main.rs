@@ -397,8 +397,9 @@ impl ApplicationHandler for App {
             }
         };
 
-        let gpu = GpuState::new(window.clone());
+        let mut gpu = GpuState::new(window.clone());
         let ui = UiState::new(&window);
+        gpu.switch_phosphor(ui.selected_phosphor());
         self.window = Some(window);
         self.gpu = Some(gpu);
         self.ui = Some(ui);
