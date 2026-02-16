@@ -18,8 +18,8 @@
 [P1]
 description = "Medium persistence green. Standard general-purpose oscilloscope phosphor."
 category = "general_purpose"
-peak_nm = 520.0
-fwhm_nm = 40.0
+peak_nm = 525.0
+fwhm_nm = 38.0
 relative_luminance = 50.0
 relative_writing_speed = 60.0
 
