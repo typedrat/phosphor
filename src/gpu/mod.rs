@@ -29,6 +29,8 @@ use self::profiler::{GpuProfiler, GpuQuery};
 use self::spectral_resolve::{SpectralResolveParams, SpectralResolvePipeline};
 
 pub struct GpuState {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub surface: wgpu::Surface<'static>,
@@ -178,6 +180,8 @@ impl GpuState {
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
 
         Self {
+            instance,
+            adapter,
             device,
             queue,
             profiler,
@@ -342,7 +346,7 @@ impl GpuState {
 /// Render egui overlay in a separate function to avoid lifetime conflicts
 /// between the encoder borrow (for the render pass) and the renderer borrow
 /// (through `self`) in wgpu 27 where `RenderPass` borrows the encoder.
-fn render_egui_pass(
+pub fn render_egui_pass(
     renderer: &egui_wgpu::Renderer,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,

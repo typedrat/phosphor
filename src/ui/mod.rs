@@ -33,7 +33,7 @@ pub struct UiState {
     pub engineer: EngineerState,
     pub input: InputState,
     tab: PanelTab,
-    panel_visible: bool,
+    pub panel_visible: bool,
 }
 
 impl UiState {
@@ -139,6 +139,70 @@ impl UiState {
 
         self.winit_state
             .handle_platform_output(window, full_output.platform_output);
+
+        let primitives = self
+            .ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        let size = window.inner_size();
+
+        EguiRenderOutput {
+            primitives,
+            textures_delta: full_output.textures_delta,
+            screen_descriptor: egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [size.width, size.height],
+                pixels_per_point: full_output.pixels_per_point,
+            },
+        }
+    }
+
+    pub fn run_detached(
+        &mut self,
+        window: &Window,
+        egui_winit: &mut egui_winit::State,
+        timings: Option<&TimingHistory>,
+    ) -> EguiRenderOutput {
+        let raw_input = egui_winit.take_egui_input(window);
+        let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
+
+        let full_output = self.ctx.run(raw_input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
+                    ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
+                });
+                ui.separator();
+
+                match self.tab {
+                    PanelTab::Scope => scope_panel::scope_panel(
+                        ui,
+                        &self.phosphors,
+                        &mut self.phosphor_index,
+                        &mut self.intensity,
+                        &mut self.focus,
+                        &mut self.input,
+                    ),
+                    PanelTab::Engineer => {
+                        engineer_panel::engineer_panel(
+                            ui,
+                            &mut self.engineer,
+                            &self.phosphors,
+                            &mut self.phosphor_index,
+                            fps,
+                            timings,
+                        );
+                    }
+                }
+            });
+        });
+
+        if self.phosphor_index != self.prev_phosphor_index {
+            self.engineer
+                .sync_from_phosphor(&self.phosphors[self.phosphor_index]);
+            self.prev_phosphor_index = self.phosphor_index;
+        }
+
+        egui_winit.handle_platform_output(window, full_output.platform_output);
 
         let primitives = self
             .ctx
