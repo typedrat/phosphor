@@ -55,6 +55,8 @@ pub struct PhosphorType {
 struct LayerData {
     peak_nm: f32,
     fwhm_nm: f32,
+    #[serde(default)]
+    decay_terms: Vec<DecayTerm>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,9 +68,8 @@ struct PhosphorData {
     peak_nm: f32,
     #[serde(default)]
     fwhm_nm: Option<f32>,
-    t_10pct: f32,
-    t_1pct: f32,
-    t_01pct: f32,
+    #[serde(default)]
+    decay_terms: Vec<DecayTerm>,
     relative_luminance: f32,
     relative_writing_speed: f32,
     fluorescence: Option<LayerData>,
@@ -86,22 +87,10 @@ fn parse_category(s: &str) -> PhosphorCategory {
 }
 
 fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
-    let (tau_fast, tau_slow, a_fast, _a_slow) =
-        decay::fit_decay(data.t_10pct, data.t_1pct, data.t_01pct);
-
-    let make_layer = |peak: f32, fwhm: f32| -> PhosphorLayer {
+    let make_layer = |peak: f32, fwhm: f32, terms: &[DecayTerm]| -> PhosphorLayer {
         PhosphorLayer {
             emission_weights: spectral::gaussian_emission_weights(peak, fwhm),
-            decay_terms: vec![
-                DecayTerm::Exponential {
-                    amplitude: a_fast,
-                    tau: tau_fast,
-                },
-                DecayTerm::Exponential {
-                    amplitude: 1.0 - a_fast,
-                    tau: tau_slow,
-                },
-            ],
+            decay_terms: terms.to_vec(),
         }
     };
 
@@ -112,16 +101,26 @@ fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
         let ph = data.phosphorescence.as_ref().unwrap_or_else(|| {
             panic!("{designation}: dual_layer = true but missing [phosphorescence]")
         });
+        let fl_terms = if fl.decay_terms.is_empty() {
+            &data.decay_terms
+        } else {
+            &fl.decay_terms
+        };
+        let ph_terms = if ph.decay_terms.is_empty() {
+            &data.decay_terms
+        } else {
+            &ph.decay_terms
+        };
         (
-            make_layer(fl.peak_nm, fl.fwhm_nm),
-            make_layer(ph.peak_nm, ph.fwhm_nm),
+            make_layer(fl.peak_nm, fl.fwhm_nm, fl_terms),
+            make_layer(ph.peak_nm, ph.fwhm_nm, ph_terms),
             true,
         )
     } else {
         let fwhm = data
             .fwhm_nm
             .unwrap_or_else(|| panic!("{designation}: single-layer phosphor missing fwhm_nm"));
-        let layer = make_layer(data.peak_nm, fwhm);
+        let layer = make_layer(data.peak_nm, fwhm, &data.decay_terms);
         (layer.clone(), layer, false)
     };
 
@@ -242,6 +241,79 @@ mod tests {
                 assert!((beta - 1.1).abs() < 1e-6);
             }
             _ => panic!("expected PowerLaw"),
+        }
+    }
+
+    #[test]
+    fn parse_explicit_decay_terms_from_toml() {
+        let toml_str = r#"
+[P1]
+description = "Medium persistence green."
+category = "general_purpose"
+peak_nm = 520.0
+fwhm_nm = 40.0
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 6.72
+tau = 0.00288
+
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.0151
+"#;
+        let phosphors = load_phosphors(toml_str).unwrap();
+        assert_eq!(phosphors.len(), 1);
+        let p1 = &phosphors[0];
+        assert_eq!(p1.fluorescence.decay_terms.len(), 2);
+        match p1.fluorescence.decay_terms[0] {
+            DecayTerm::Exponential { amplitude, tau } => {
+                assert!((amplitude - 6.72).abs() < 1e-6);
+                assert!((tau - 0.00288).abs() < 1e-8);
+            }
+            _ => panic!("expected exponential"),
+        }
+    }
+
+    #[test]
+    fn parse_power_law_term_from_toml() {
+        let toml_str = r#"
+[P31]
+description = "Medium-short persistence green."
+category = "general_purpose"
+peak_nm = 530.0
+fwhm_nm = 50.0
+relative_luminance = 100.0
+relative_writing_speed = 100.0
+
+[[P31.decay_terms]]
+type = "power_law"
+amplitude = 2.1e-4
+alpha = 5.5e-6
+beta = 1.1
+
+[[P31.decay_terms]]
+type = "exponential"
+amplitude = 90.0
+tau = 31.8e-9
+"#;
+        let phosphors = load_phosphors(toml_str).unwrap();
+        let p31 = &phosphors[0];
+        assert_eq!(p31.fluorescence.decay_terms.len(), 2);
+        match p31.fluorescence.decay_terms[0] {
+            DecayTerm::PowerLaw {
+                amplitude,
+                alpha,
+                beta,
+            } => {
+                assert!((amplitude - 2.1e-4).abs() < 1e-10);
+                assert!((alpha - 5.5e-6).abs() < 1e-12);
+                assert!((beta - 1.1).abs() < 1e-6);
+            }
+            _ => panic!("expected power_law"),
         }
     }
 

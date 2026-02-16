@@ -58,11 +58,32 @@ impl Default for EngineerState {
 
 impl EngineerState {
     /// Update decay and emission parameters from the selected phosphor type.
+    ///
+    /// TODO(Task 12): Rework for multi-term decay model. Currently extracts
+    /// the first two exponential terms for backward-compatible slider display.
     pub fn sync_from_phosphor(&mut self, phosphor: &PhosphorType) {
-        let layer = &phosphor.fluorescence;
-        self.tau_fast = layer.tau_fast;
-        self.tau_slow = layer.tau_slow;
-        self.a_fast = layer.a_fast;
+        use phosphor_data::DecayTerm;
+        let exps: Vec<_> = phosphor
+            .fluorescence
+            .decay_terms
+            .iter()
+            .filter_map(|t| match t {
+                DecayTerm::Exponential { amplitude, tau } => Some((*amplitude, *tau)),
+                _ => None,
+            })
+            .collect();
+        if let Some(&(_, tau)) = exps.first() {
+            self.tau_fast = tau;
+        }
+        if let Some(&(_, tau)) = exps.get(1) {
+            self.tau_slow = tau;
+        }
+        if exps.len() >= 2 {
+            let sum: f32 = exps.iter().map(|(a, _)| a).sum();
+            if sum > 0.0 {
+                self.a_fast = exps[0].0 / sum;
+            }
+        }
     }
 }
 

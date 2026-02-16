@@ -1,13 +1,17 @@
 # Phosphor Database
 #
-# Source: Tektronix CRT Data Reference Tables (Rev A, 1966)
-#
-# Decay times are in seconds. Emission peaks are approximate Gaussian
-# profiles characterized by center wavelength and FWHM.
+# Decay terms are explicit per phosphor. Sources:
+#   - Selomulya et al. (2003): P1 Mn²⁺ thin-film bi-exponential
+#   - Kuhn (2002): P22 Green/Blue PMT impulse response
+#   - ZnO:Zn literature: P15, P24 single-exponential
 #
 # For dual-layer phosphors (marked dual_layer = true), the [fluorescence]
 # and [phosphorescence] sub-tables define per-layer emission. For
 # single-layer phosphors, top-level peak_nm/fwhm_nm apply to both layers.
+#
+# Phosphors with only Tektronix 10%/1%/0.1% decay-time data (P2, P3, P4,
+# P7, P14, P17, P20, P32) are omitted pending better impulse-response
+# measurements to produce accurate multi-term fits.
 
 # --- General Purpose ---
 
@@ -16,44 +20,49 @@ description = "Medium persistence green. Standard general-purpose oscilloscope p
 category = "general_purpose"
 peak_nm = 520.0
 fwhm_nm = 40.0
-t_10pct = 0.027
-t_1pct = 0.060
-t_01pct = 0.095
 relative_luminance = 50.0
 relative_writing_speed = 60.0
 
-[P20]
-description = "Medium persistence yellow-green. General-purpose oscilloscope and display."
-category = "general_purpose"
-peak_nm = 560.0
-fwhm_nm = 50.0
-t_10pct = 0.000230
-t_1pct = 0.002300
-t_01pct = 0.011000
-relative_luminance = 55.0
-relative_writing_speed = 85.0
+# Selomulya et al. (2003): Mn²⁺ two-site bi-exponential
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 6.72
+tau = 0.00288
+
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.0151
 
 [P31]
 description = "Medium-short persistence green. Most common oscilloscope phosphor."
 category = "general_purpose"
 peak_nm = 530.0
 fwhm_nm = 50.0
-t_10pct = 0.000340
-t_1pct = 0.004500
-t_01pct = 0.032000
 relative_luminance = 100.0
 relative_writing_speed = 100.0
 
-[P32]
-description = "Medium-short persistence yellow-green. Similar to P31, slightly warmer."
-category = "general_purpose"
-peak_nm = 525.0
-fwhm_nm = 45.0
-t_10pct = 0.000350
-t_1pct = 0.004000
-t_01pct = 0.030000
-relative_luminance = 95.0
-relative_writing_speed = 90.0
+# Kuhn (2002) P22 Green model: ZnS:Cu,Al bimolecular DAP recombination
+[[P31.decay_terms]]
+type = "power_law"
+amplitude = 2.1e-4
+alpha = 5.5e-6
+beta = 1.1
+
+[[P31.decay_terms]]
+type = "exponential"
+amplitude = 90.0
+tau = 31.8e-9
+
+[[P31.decay_terms]]
+type = "exponential"
+amplitude = 100.0
+tau = 227.0e-9
+
+[[P31.decay_terms]]
+type = "exponential"
+amplitude = 37.0
+tau = 1.06e-6
 
 # --- Short Decay ---
 
@@ -62,132 +71,55 @@ description = "Short persistence blue. Photographic recording and high-speed dis
 category = "short_decay"
 peak_nm = 450.0
 fwhm_nm = 25.0
-t_10pct = 0.000020
-t_1pct = 0.000080
-t_01pct = 0.000200
 relative_luminance = 15.0
 relative_writing_speed = 150.0
+
+# Kuhn (2002) P22 Blue model: ZnS:Ag bimolecular DAP recombination
+[[P11.decay_terms]]
+type = "power_law"
+amplitude = 1.9e-4
+alpha = 5.0e-6
+beta = 1.11
+
+[[P11.decay_terms]]
+type = "exponential"
+amplitude = 1100.0
+tau = 39.8e-9
+
+[[P11.decay_terms]]
+type = "exponential"
+amplitude = 1000.0
+tau = 145.0e-9
+
+[[P11.decay_terms]]
+type = "exponential"
+amplitude = 75.0
+tau = 1.59e-6
 
 [P15]
 description = "Very short persistence near-UV. Flying-spot scanners."
 category = "short_decay"
 peak_nm = 391.0
 fwhm_nm = 20.0
-t_10pct = 0.000002
-t_1pct = 0.000012
-t_01pct = 0.000050
 relative_luminance = 3.0
 relative_writing_speed = 250.0
+
+# ZnO:Zn near-exponential, single fast term
+[[P15.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 3.0e-6
 
 [P24]
 description = "Short persistence green. Flying-spot scanners and high-speed recording."
 category = "short_decay"
 peak_nm = 510.0
 fwhm_nm = 35.0
-t_10pct = 0.000018
-t_1pct = 0.000137
-t_01pct = 0.000590
 relative_luminance = 25.0
 relative_writing_speed = 120.0
 
-# --- Video Display ---
-
-[P3]
-description = "Medium persistence amber. Standard phosphor for amber monochrome computer monitors."
-category = "video_display"
-peak_nm = 560.0
-fwhm_nm = 45.0
-t_10pct = 0.019
-t_1pct = 0.045
-t_01pct = 0.074
-relative_luminance = 50.0
-relative_writing_speed = 55.0
-
-[P4]
-description = "Medium-short persistence white. Standard black-and-white television."
-category = "video_display"
-peak_nm = 555.0
-fwhm_nm = 60.0
-t_10pct = 0.000320
-t_1pct = 0.003300
-t_01pct = 0.020000
-relative_luminance = 70.0
-relative_writing_speed = 80.0
-
-# --- Long Decay (Sulfide) ---
-
-[P2]
-description = "Dual-layer blue-green flash with yellow-green phosphorescence. Radar and oscilloscopes."
-category = "long_decay_sulfide"
-dual_layer = true
-peak_nm = 510.0
-t_10pct = 0.000370
-t_1pct = 0.004700
-t_01pct = 0.051000
-relative_luminance = 60.0
-relative_writing_speed = 70.0
-
-[P2.fluorescence]
-peak_nm = 510.0
-fwhm_nm = 35.0
-
-[P2.phosphorescence]
-peak_nm = 560.0
-fwhm_nm = 50.0
-
-[P7]
-description = "Dual-layer blue flash with long persistence yellow-green. Radar PPI displays."
-category = "long_decay_sulfide"
-dual_layer = true
-peak_nm = 450.0
-t_10pct = 0.000305
-t_1pct = 0.005700
-t_01pct = 0.066000
-relative_luminance = 35.0
-relative_writing_speed = 65.0
-
-[P7.fluorescence]
-peak_nm = 450.0
-fwhm_nm = 30.0
-
-[P7.phosphorescence]
-peak_nm = 530.0
-fwhm_nm = 50.0
-
-[P14]
-description = "Dual-layer blue-purple flash with orange phosphorescence. Radar displays."
-category = "long_decay_sulfide"
-dual_layer = true
-peak_nm = 460.0
-t_10pct = 0.000440
-t_1pct = 0.006700
-t_01pct = 0.055000
-relative_luminance = 40.0
-relative_writing_speed = 60.0
-
-[P14.fluorescence]
-peak_nm = 460.0
-fwhm_nm = 30.0
-
-[P14.phosphorescence]
-peak_nm = 545.0
-fwhm_nm = 50.0
-
-[P17]
-description = "Dual-layer blue flash with yellow-green phosphorescence. Long-persistence radar."
-category = "long_decay_sulfide"
-dual_layer = true
-peak_nm = 450.0
-t_10pct = 0.000130
-t_1pct = 0.008700
-t_01pct = 0.082500
-relative_luminance = 30.0
-relative_writing_speed = 55.0
-
-[P17.fluorescence]
-peak_nm = 450.0
-fwhm_nm = 25.0
-
-[P17.phosphorescence]
-peak_nm = 530.0
-fwhm_nm = 50.0
+# ZnO:Zn near-exponential, single fast term
+[[P24.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 1.5e-6

@@ -27,14 +27,31 @@ fn format_category(cat: &phosphor_data::PhosphorCategory) -> &'static str {
     }
 }
 
+fn format_decay_term(term: &phosphor_data::DecayTerm) -> String {
+    match term {
+        phosphor_data::DecayTerm::Exponential { amplitude, tau } => {
+            format!(
+                "phosphor_data::DecayTerm::Exponential {{ amplitude: {amplitude}_f32, tau: {tau}_f32 }}"
+            )
+        }
+        phosphor_data::DecayTerm::PowerLaw {
+            amplitude,
+            alpha,
+            beta,
+        } => {
+            format!(
+                "phosphor_data::DecayTerm::PowerLaw {{ amplitude: {amplitude}_f32, alpha: {alpha}_f32, beta: {beta}_f32 }}"
+            )
+        }
+    }
+}
+
 fn format_layer(layer: &phosphor_data::PhosphorLayer) -> String {
+    let terms: Vec<String> = layer.decay_terms.iter().map(format_decay_term).collect();
     format!(
-        "phosphor_data::PhosphorLayer {{ emission_weights: {}, tau_fast: {}_f32, tau_slow: {}_f32, a_fast: {}_f32, a_slow: {}_f32 }}",
+        "phosphor_data::PhosphorLayer {{ emission_weights: {}, decay_terms: vec![{}] }}",
         format_weights(&layer.emission_weights),
-        layer.tau_fast,
-        layer.tau_slow,
-        layer.a_fast,
-        layer.a_slow,
+        terms.join(", "),
     )
 }
 
