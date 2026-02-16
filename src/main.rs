@@ -22,11 +22,11 @@ enum WindowMode {
 }
 
 struct ControlsWindow {
-    window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
     egui_renderer: egui_wgpu::Renderer,
     egui_winit: egui_winit::State,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    window: Arc<Window>,
 }
 
 impl ControlsWindow {
@@ -104,21 +104,23 @@ impl ControlsWindow {
 }
 
 struct App {
-    window: Option<Arc<Window>>,
+    // Drop order matters: GPU resources (surfaces) must be dropped before the
+    // windows they reference, so `gpu` and `controls` are declared before `window`.
     gpu: Option<GpuState>,
+    controls: Option<ControlsWindow>,
     ui: Option<UiState>,
     mode: WindowMode,
-    controls: Option<ControlsWindow>,
+    window: Option<Arc<Window>>,
 }
 
 impl Default for App {
     fn default() -> Self {
         Self {
-            window: None,
             gpu: None,
+            controls: None,
             ui: None,
             mode: WindowMode::default(),
-            controls: None,
+            window: None,
         }
     }
 }
@@ -412,6 +414,25 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Intercept Ctrl/Cmd+Q to quit
+        if let WindowEvent::KeyboardInput {
+            event:
+                winit::event::KeyEvent {
+                    physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyQ),
+                    state: winit::event::ElementState::Pressed,
+                    ..
+                },
+            ..
+        } = &event
+        {
+            if let Some(ui) = &self.ui {
+                if ui.ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd) {
+                    event_loop.exit();
+                    return;
+                }
+            }
+        }
+
         // Intercept Ctrl+D for detach/attach toggle (on any window)
         if let WindowEvent::KeyboardInput {
             event:
