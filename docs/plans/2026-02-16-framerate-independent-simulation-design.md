@@ -19,12 +19,12 @@ Sample generation and decay are coupled to the render frame rate. `InputState::g
 ### Thread Model
 
 ```
-+---------------------+         rtrb SPSC          +----------------------+
++---------------------+         rtrb SPSC           +----------------------+
 |  Simulation Thread  |  ----- ring buffer ------>  |   Render Thread      |
 |                     |    (BeamSample x 64K)       |   (main/winit)       |
 |  Fixed-rate loop    |                             |                      |
 |  at sample_rate     |  <-- crossbeam-channel ---  |  UI param changes    |
-|  (e.g. 44100 Hz)   |       (SimCommand)          |  phosphor switches   |
+|  (e.g. 44100 Hz)    |       (SimCommand)          |  phosphor switches   |
 |                     |                             |  mode changes        |
 |  Generate samples   |                             |                      |
 |  Arc-length resample|                             |  Drain ring buffer   |
@@ -53,13 +53,13 @@ Backpressure: if the ring buffer is full, drop samples (push fails). This means 
 
 Owns `GpuState`, `UiState`, winit event loop. On `RedrawRequested`:
 
-1. Drain ALL pending samples from ring buffer via `read_chunk` (zero-copy bulk read)
-2. Compute simulation dt: `sim_dt = sample_count / sample_rate`
-3. One beam write dispatch with all drained samples
+1. Drain samples from ring buffer via `read_chunk`, up to a **frame budget cap** of `sample_rate * 2 * frame_interval` samples, derived from the monitor's actual refresh rate (e.g. 33ms at 60Hz, 14ms at 144Hz). Any excess stays in the buffer for the next frame.
+2. Compute simulation dt: `sim_dt = drained_count / sample_rate`
+3. One beam write dispatch with drained samples
 4. One decay pass with `sim_dt` (mathematically equivalent to per-tick decay for exponential: `exp(-dt/tau)^N = exp(-N*dt/tau)`)
 5. Spectral resolve, faceplate scatter, composite as before
 
-No wall-clock dt measurement for simulation. Frame pacing remains for vsync only.
+The frame budget cap prevents catastrophic decay during render stalls — if the GPU hangs for 500ms, the backlog is consumed over multiple frames rather than applied as one massive `exp(-0.5/tau)` step. No wall-clock dt measurement for simulation. Frame pacing remains for vsync only.
 
 ### Command Channel
 
@@ -77,7 +77,7 @@ enum SimCommand {
     SetAudioLooping(bool),
     SetAudioSpeed(f32),
     LoadVectorFile(PathBuf),
-    SetSampleRate(f32),
+    SetSampleRate { rate: f32, producer: SampleProducer },
     Shutdown,
 }
 ```
@@ -92,9 +92,11 @@ Keep `rtrb` for the high-throughput sample path. It provides:
 - SPSC optimization (exactly our topology)
 - Purpose-built for real-time audio workloads
 
-The existing `SampleProducer`/`SampleConsumer` wrappers are extended to use `write_chunk`/`read_chunk` for batched operations. Buffer capacity: 64K samples (~1.5 seconds at 44.1kHz).
+The existing `SampleProducer`/`SampleConsumer` wrappers are extended to use `write_chunk`/`read_chunk` for batched operations.
 
-Future raster operations will vastly increase sample counts — bulk reads are critical.
+Buffer capacity scales with sample rate: `max(65536, sample_rate * 0.5)` (~500ms of buffer). When the sample rate changes, the render thread creates a new channel with the appropriate capacity, sends the new `SampleProducer` to the sim thread via `SimCommand::SetSampleRate { rate, producer }`, and swaps in the new `SampleConsumer`. The old channel is dropped.
+
+Future raster operations will vastly increase sample counts — bulk reads and dynamic buffer sizing are critical.
 
 ### Aspect Ratio and Viewport Fix
 
@@ -116,8 +118,28 @@ Decay uses simulation time, not wall clock:
 - Instant (tier 1): cleared after spectral resolve, same as before
 - When no samples are drained (sim thread paused or buffer empty): `sim_dt = 0`, no decay applied
 
+### Observability
+
+**Logging (stderr via `tracing` crate — replaces `log` + `env_logger`):**
+
+- `info`: Sim thread start/stop, sample rate changes, buffer resize (with old/new capacity)
+- `debug`: Batch interval adaptation changes
+- `warn`: Buffer overflow (samples dropped because ring buffer full)
+
+**Engineer panel statistics** (shared `Arc<SimStats>` with atomic fields, sim thread writes, render thread reads):
+
+- Samples drained this frame / sim_dt
+- Ring buffer fill level (samples pending / capacity)
+- Current adaptive batch interval
+- Cumulative samples dropped (overflow count)
+- Actual sim throughput (samples/sec, smoothed)
+
+`SimStats` uses `AtomicF32` (from `atomic_float`) for float fields and `AtomicU32` for counters. No locks, no channel — just atomic stores from sim thread, atomic loads from render thread.
+
 ### Dependencies
 
 - **Keep:** `rtrb` (sample ring buffer with bulk read/write)
+- **Add:** `atomic_float` (ergonomic atomic f32 without manual bit-casting)
 - **Add:** `crossbeam-channel` (command channel, sim thread <-> render thread)
 - **Add:** `spin_sleep` (high-resolution thread pacing for sim loop)
+- **Replace:** `log` + `env_logger` → `tracing` + `tracing-subscriber` + `tracing-appender` (structured, thread-aware logging with spans; non-blocking writer so log calls never stall the sim or render threads)
