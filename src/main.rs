@@ -269,8 +269,18 @@ impl App {
                     samples.len() as f32 / self.sample_rate
                 };
 
-                // Send SimCommands for parameters that may have changed
+                // Run egui frame only in Combined mode
+                let egui_output = if self.mode == WindowMode::Combined {
+                    let timings = gpu.profiler.as_ref().map(|p| &p.history);
+                    Some(ui.run(window, timings))
+                } else {
+                    None
+                };
+
+                // Forward UI state changes to the simulation thread
                 if let Some(tx) = &self.sim_commands {
+                    let _ = tx.send(SimCommand::SetInputMode(ui.input_mode));
+                    let _ = tx.send(SimCommand::SetOscilloscopeParams(ui.oscilloscope.clone()));
                     let _ = tx.send(SimCommand::SetFocus(ui.focus));
                     let sidebar_width = if self.mode == WindowMode::Combined && ui.panel_visible {
                         220.0
@@ -282,15 +292,24 @@ impl App {
                         height: gpu.surface_config.height as f32,
                         x_offset: sidebar_width,
                     });
-                }
+                    let _ = tx.send(SimCommand::SetAccumResolution(gpu.accum.resolution));
 
-                // Run egui frame only in Combined mode
-                let egui_output = if self.mode == WindowMode::Combined {
-                    let timings = gpu.profiler.as_ref().map(|p| &p.history);
-                    Some(ui.run(window, timings))
-                } else {
-                    None
-                };
+                    // Audio controls
+                    let _ = tx.send(SimCommand::SetAudioPlaying(ui.audio_ui.playing));
+                    let _ = tx.send(SimCommand::SetAudioLooping(ui.audio_ui.looping));
+                    let _ = tx.send(SimCommand::SetAudioSpeed(ui.audio_ui.speed));
+                    if let Some(path) = ui.audio_ui.pending_file.take() {
+                        ui.audio_ui.file_path = Some(path.clone());
+                        ui.audio_ui.has_file = true;
+                        let _ = tx.send(SimCommand::LoadAudioFile(path));
+                    }
+
+                    // Vector controls
+                    if let Some(path) = ui.vector_ui.pending_file.take() {
+                        ui.vector_ui.file_path = Some(path.clone());
+                        let _ = tx.send(SimCommand::LoadVectorFile(path));
+                    }
+                }
 
                 match gpu.render(&samples, sim_dt, egui_output.as_ref()) {
                     Ok(()) => {}

@@ -1,7 +1,9 @@
 use strum::IntoEnumIterator;
 
-use crate::app::{ExternalMode, InputMode, InputState};
+use crate::app::{ExternalMode, ExternalState, InputMode, OscilloscopeState};
 use crate::phosphor::PhosphorType;
+
+use super::{AudioUiState, VectorUiState};
 
 pub fn scope_panel(
     ui: &mut egui::Ui,
@@ -9,7 +11,11 @@ pub fn scope_panel(
     phosphor_index: &mut usize,
     intensity: &mut f32,
     focus: &mut f32,
-    input: &mut InputState,
+    input_mode: &mut InputMode,
+    oscilloscope: &mut OscilloscopeState,
+    audio_ui: &mut AudioUiState,
+    vector_ui: &mut VectorUiState,
+    external: &mut ExternalState,
 ) {
     ui.heading("Phosphor");
 
@@ -38,25 +44,23 @@ pub fn scope_panel(
     ui.heading("Input");
 
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut input.mode, InputMode::Oscilloscope, "Scope");
-        ui.selectable_value(&mut input.mode, InputMode::Audio, "Audio");
-        ui.selectable_value(&mut input.mode, InputMode::Vector, "Vector");
-        ui.selectable_value(&mut input.mode, InputMode::External, "Extern");
+        ui.selectable_value(input_mode, InputMode::Oscilloscope, "Scope");
+        ui.selectable_value(input_mode, InputMode::Audio, "Audio");
+        ui.selectable_value(input_mode, InputMode::Vector, "Vector");
+        ui.selectable_value(input_mode, InputMode::External, "Extern");
     });
 
     ui.separator();
 
-    egui::ScrollArea::vertical().show(ui, |ui| match input.mode {
-        InputMode::Oscilloscope => oscilloscope_controls(ui, input),
-        InputMode::Audio => audio_controls(ui, input),
-        InputMode::Vector => vector_controls(ui, input),
-        InputMode::External => external_controls(ui, input),
+    egui::ScrollArea::vertical().show(ui, |ui| match input_mode {
+        InputMode::Oscilloscope => oscilloscope_controls(ui, oscilloscope),
+        InputMode::Audio => audio_controls(ui, audio_ui),
+        InputMode::Vector => vector_controls(ui, vector_ui),
+        InputMode::External => external_controls(ui, external),
     });
 }
 
-fn oscilloscope_controls(ui: &mut egui::Ui, input: &mut InputState) {
-    let osc = &mut input.oscilloscope;
-
+fn oscilloscope_controls(ui: &mut egui::Ui, osc: &mut OscilloscopeState) {
     ui.label("X Channel");
     ui.indent("x_ch", |ui| {
         egui::ComboBox::from_id_salt("x_waveform")
@@ -106,114 +110,95 @@ fn oscilloscope_controls(ui: &mut egui::Ui, input: &mut InputState) {
     );
 }
 
-fn audio_controls(ui: &mut egui::Ui, input: &mut InputState) {
+fn audio_controls(ui: &mut egui::Ui, audio: &mut AudioUiState) {
     if ui.button("Open File...").clicked()
         && let Some(path) = rfd::FileDialog::new()
             .add_filter("Audio", &["wav", "flac", "ogg", "mp3"])
             .pick_file()
     {
-        input.load_audio_file(path);
+        audio.pending_file = Some(path);
     }
 
-    if let Some(err) = &input.audio.load_error {
+    if let Some(err) = &audio.load_error {
         ui.colored_label(egui::Color32::RED, err);
     }
 
-    if let Some(path) = &input.audio.file_path
+    if let Some(path) = &audio.file_path
         && let Some(name) = path.file_name()
     {
         ui.label(name.to_string_lossy().as_ref());
     }
 
-    if input.audio.source.is_some() {
+    if audio.has_file {
         ui.separator();
         ui.horizontal(|ui| {
-            let play_label = if input.audio.playing { "Pause" } else { "Play" };
+            let play_label = if audio.playing { "Pause" } else { "Play" };
             if ui.button(play_label).clicked() {
-                input.audio.playing = !input.audio.playing;
+                audio.playing = !audio.playing;
             }
-            if ui.button("Stop").clicked() {
-                input.audio.playing = false;
-                if let Some(source) = &mut input.audio.source {
-                    source.seek(0.0);
-                }
-            }
-            ui.checkbox(&mut input.audio.looping, "Loop");
+            ui.checkbox(&mut audio.looping, "Loop");
         });
 
-        if let Some(source) = &mut input.audio.source {
-            let duration = source.duration_secs();
-            if duration > 0.0 {
-                let mut frac = source.position_secs() / duration;
-                if ui
-                    .add(egui::Slider::new(&mut frac, 0.0..=1.0).text("Seek"))
-                    .changed()
-                {
-                    source.seek(frac);
-                }
-            }
-        }
-
         ui.add(
-            egui::Slider::new(&mut input.audio.speed, 0.25..=4.0)
+            egui::Slider::new(&mut audio.speed, 0.25..=4.0)
                 .logarithmic(true)
                 .text("Speed"),
         );
     }
 }
 
-fn vector_controls(ui: &mut egui::Ui, input: &mut InputState) {
+fn vector_controls(ui: &mut egui::Ui, vector: &mut VectorUiState) {
     if ui.button("Open File...").clicked()
         && let Some(path) = rfd::FileDialog::new()
             .add_filter("JSON", &["json"])
             .pick_file()
     {
-        input.load_vector_file(path);
+        vector.pending_file = Some(path);
     }
 
-    if let Some(err) = &input.vector.load_error {
+    if let Some(err) = &vector.load_error {
         ui.colored_label(egui::Color32::RED, err);
     }
 
-    if let Some(path) = &input.vector.file_path
+    if let Some(path) = &vector.file_path
         && let Some(name) = path.file_name()
     {
         ui.label(name.to_string_lossy().as_ref());
     }
 
-    if !input.vector.segments.is_empty() {
-        ui.label(format!("{} segments", input.vector.segments.len()));
+    if vector.segment_count > 0 {
+        ui.label(format!("{} segments", vector.segment_count));
 
         ui.separator();
 
         ui.add(
-            egui::Slider::new(&mut input.vector.beam_speed, 0.1..=10.0)
+            egui::Slider::new(&mut vector.beam_speed, 0.1..=10.0)
                 .logarithmic(true)
                 .text("Beam Speed"),
         );
         ui.add(
-            egui::Slider::new(&mut input.vector.settling_time, 0.0001..=0.01)
+            egui::Slider::new(&mut vector.settling_time, 0.0001..=0.01)
                 .logarithmic(true)
                 .text("Settling"),
         );
-        ui.checkbox(&mut input.vector.looping, "Loop");
+        ui.checkbox(&mut vector.looping, "Loop");
     }
 }
 
-fn external_controls(ui: &mut egui::Ui, input: &mut InputState) {
+fn external_controls(ui: &mut egui::Ui, external: &mut ExternalState) {
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut input.external.mode, ExternalMode::Stdin, "stdin");
-        ui.selectable_value(&mut input.external.mode, ExternalMode::Socket, "Socket");
+        ui.selectable_value(&mut external.mode, ExternalMode::Stdin, "stdin");
+        ui.selectable_value(&mut external.mode, ExternalMode::Socket, "Socket");
     });
 
-    if input.external.mode == ExternalMode::Socket {
+    if external.mode == ExternalMode::Socket {
         ui.horizontal(|ui| {
             ui.label("Path:");
-            ui.text_edit_singleline(&mut input.external.socket_path);
+            ui.text_edit_singleline(&mut external.socket_path);
         });
     }
 
-    let (color, text) = if input.external.connected {
+    let (color, text) = if external.connected {
         (egui::Color32::GREEN, "Connected")
     } else {
         (egui::Color32::GRAY, "Not connected")

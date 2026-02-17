@@ -1,9 +1,11 @@
 pub mod engineer_panel;
 pub mod scope_panel;
 
+use std::path::PathBuf;
+
 use winit::window::Window;
 
-use crate::app::InputState;
+use crate::app::{ExternalState, InputMode, OscilloscopeState};
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
 use crate::types::Resolution;
@@ -23,6 +25,59 @@ pub struct EguiRenderOutput {
     pub screen_descriptor: egui_wgpu::ScreenDescriptor,
 }
 
+/// UI-only audio state (AudioSource lives on the sim thread).
+pub struct AudioUiState {
+    pub file_path: Option<PathBuf>,
+    pub playing: bool,
+    pub looping: bool,
+    pub speed: f32,
+    pub has_file: bool,
+    pub load_error: Option<String>,
+    /// Set by the UI when a file is picked; consumed by the render thread
+    /// to send a LoadAudioFile command to the sim thread.
+    pub pending_file: Option<PathBuf>,
+}
+
+impl Default for AudioUiState {
+    fn default() -> Self {
+        Self {
+            file_path: None,
+            playing: false,
+            looping: false,
+            speed: 1.0,
+            has_file: false,
+            load_error: None,
+            pending_file: None,
+        }
+    }
+}
+
+/// UI-only vector state (segment data lives on the sim thread).
+pub struct VectorUiState {
+    pub file_path: Option<PathBuf>,
+    pub segment_count: usize,
+    pub beam_speed: f32,
+    pub settling_time: f32,
+    pub looping: bool,
+    pub load_error: Option<String>,
+    /// Set by the UI when a file is picked; consumed by the render thread.
+    pub pending_file: Option<PathBuf>,
+}
+
+impl Default for VectorUiState {
+    fn default() -> Self {
+        Self {
+            file_path: None,
+            segment_count: 0,
+            beam_speed: 1.0,
+            settling_time: 0.001,
+            looping: true,
+            load_error: None,
+            pending_file: None,
+        }
+    }
+}
+
 pub struct UiState {
     pub ctx: egui::Context,
     winit_state: egui_winit::State,
@@ -32,7 +87,12 @@ pub struct UiState {
     pub intensity: f32,
     pub focus: f32,
     pub engineer: EngineerState,
-    pub input: InputState,
+    // UI-local copies of input state (sim thread owns the real InputState)
+    pub input_mode: InputMode,
+    pub oscilloscope: OscilloscopeState,
+    pub audio_ui: AudioUiState,
+    pub vector_ui: VectorUiState,
+    pub external: ExternalState,
     tab: PanelTab,
     pub panel_visible: bool,
     pub accum_size: Option<Resolution>,
@@ -62,7 +122,11 @@ impl UiState {
             intensity: 1.0,
             focus: 1.5,
             engineer,
-            input: InputState::default(),
+            input_mode: InputMode::default(),
+            oscilloscope: OscilloscopeState::default(),
+            audio_ui: AudioUiState::default(),
+            vector_ui: VectorUiState::default(),
+            external: ExternalState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
             accum_size: None,
@@ -101,14 +165,20 @@ impl UiState {
                         ui.separator();
 
                         match self.tab {
-                            PanelTab::Scope => scope_panel::scope_panel(
-                                ui,
-                                &self.phosphors,
-                                &mut self.phosphor_index,
-                                &mut self.intensity,
-                                &mut self.focus,
-                                &mut self.input,
-                            ),
+                            PanelTab::Scope => {
+                                scope_panel::scope_panel(
+                                    ui,
+                                    &self.phosphors,
+                                    &mut self.phosphor_index,
+                                    &mut self.intensity,
+                                    &mut self.focus,
+                                    &mut self.input_mode,
+                                    &mut self.oscilloscope,
+                                    &mut self.audio_ui,
+                                    &mut self.vector_ui,
+                                    &mut self.external,
+                                );
+                            }
                             PanelTab::Engineer => {
                                 engineer_panel::engineer_panel(
                                     ui,
@@ -170,14 +240,20 @@ impl UiState {
                 ui.separator();
 
                 match self.tab {
-                    PanelTab::Scope => scope_panel::scope_panel(
-                        ui,
-                        &self.phosphors,
-                        &mut self.phosphor_index,
-                        &mut self.intensity,
-                        &mut self.focus,
-                        &mut self.input,
-                    ),
+                    PanelTab::Scope => {
+                        scope_panel::scope_panel(
+                            ui,
+                            &self.phosphors,
+                            &mut self.phosphor_index,
+                            &mut self.intensity,
+                            &mut self.focus,
+                            &mut self.input_mode,
+                            &mut self.oscilloscope,
+                            &mut self.audio_ui,
+                            &mut self.vector_ui,
+                            &mut self.external,
+                        );
+                    }
                     PanelTab::Engineer => {
                         engineer_panel::engineer_panel(
                             ui,
