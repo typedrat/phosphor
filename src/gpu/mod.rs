@@ -7,7 +7,6 @@ pub mod profiler;
 pub mod spectral_resolve;
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use phosphor_data::spectral::SPECTRAL_BANDS;
 
@@ -62,7 +61,6 @@ pub struct GpuState {
     pub instance: wgpu::Instance,
     /// Whether the swapchain surface supports HDR output.
     pub hdr_output: bool,
-    last_frame: Instant,
 }
 
 impl GpuState {
@@ -207,7 +205,6 @@ impl GpuState {
             composite_params,
             egui_renderer,
             hdr_output,
-            last_frame: Instant::now(),
         }
     }
 
@@ -269,12 +266,9 @@ impl GpuState {
     pub fn render(
         &mut self,
         samples: &[BeamSample],
+        dt: f32,
         egui: Option<&EguiRenderOutput>,
     ) -> Result<(), wgpu::SurfaceError> {
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_frame).as_secs_f32();
-        self.last_frame = now;
-
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture

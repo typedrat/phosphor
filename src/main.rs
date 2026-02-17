@@ -16,7 +16,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+use beam::SampleConsumer;
 use gpu::GpuState;
+use simulation::SimCommand;
 use types::Resolution;
 use ui::UiState;
 
@@ -122,6 +124,11 @@ struct App {
     window: Option<Arc<Window>>,
     frame_interval: Duration,
     next_frame: Instant,
+    // Simulation thread
+    sim_consumer: Option<SampleConsumer>,
+    sim_commands: Option<crossbeam_channel::Sender<SimCommand>>,
+    sim_handle: Option<std::thread::JoinHandle<()>>,
+    sample_rate: f32,
 }
 
 impl Default for App {
@@ -134,6 +141,10 @@ impl Default for App {
             window: None,
             frame_interval: DEFAULT_FRAME_INTERVAL,
             next_frame: Instant::now(),
+            sim_consumer: None,
+            sim_commands: None,
+            sim_handle: None,
+            sample_rate: 44100.0,
         }
     }
 }
@@ -176,6 +187,12 @@ impl App {
 
         match event {
             WindowEvent::CloseRequested => {
+                if let Some(tx) = self.sim_commands.take() {
+                    let _ = tx.send(SimCommand::Shutdown);
+                }
+                if let Some(handle) = self.sim_handle.take() {
+                    let _ = handle.join();
+                }
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -237,11 +254,35 @@ impl App {
                     gpu.surface_config.height as f32,
                 ];
 
-                // Generate beam samples from active input source
-                let aspect = gpu.surface_config.width as f32 / gpu.surface_config.height as f32;
-                let samples = ui
-                    .input
-                    .generate_samples(ui.focus, aspect, gpu.accum.resolution);
+                // Drain samples from simulation thread's ring buffer.
+                // Cap at 2x frame interval to prevent catastrophic decay during stalls.
+                let max_dt = self.frame_interval.as_secs_f32() * 2.0;
+                let max_samples = (self.sample_rate * max_dt) as usize;
+                let samples = self
+                    .sim_consumer
+                    .as_mut()
+                    .map(|c| c.drain_up_to(max_samples))
+                    .unwrap_or_default();
+                let sim_dt = if samples.is_empty() {
+                    0.0
+                } else {
+                    samples.len() as f32 / self.sample_rate
+                };
+
+                // Send SimCommands for parameters that may have changed
+                if let Some(tx) = &self.sim_commands {
+                    let _ = tx.send(SimCommand::SetFocus(ui.focus));
+                    let sidebar_width = if self.mode == WindowMode::Combined && ui.panel_visible {
+                        220.0
+                    } else {
+                        0.0
+                    };
+                    let _ = tx.send(SimCommand::SetViewport {
+                        width: gpu.surface_config.width as f32 - sidebar_width,
+                        height: gpu.surface_config.height as f32,
+                        x_offset: sidebar_width,
+                    });
+                }
 
                 // Run egui frame only in Combined mode
                 let egui_output = if self.mode == WindowMode::Combined {
@@ -251,7 +292,7 @@ impl App {
                     None
                 };
 
-                match gpu.render(&samples, egui_output.as_ref()) {
+                match gpu.render(&samples, sim_dt, egui_output.as_ref()) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
@@ -435,6 +476,22 @@ impl ApplicationHandler for App {
         let mut gpu = GpuState::new(window.clone());
         let ui = UiState::new(&window);
         gpu.switch_phosphor(ui.selected_phosphor());
+
+        // Spawn simulation thread
+        let (producer, consumer) = crate::beam::sample_channel(65536);
+        let (handle, cmd_tx) = crate::simulation::spawn_simulation(producer);
+
+        // Send initial viewport dimensions
+        let size = window.inner_size();
+        let _ = cmd_tx.send(SimCommand::SetViewport {
+            width: size.width as f32,
+            height: size.height as f32,
+            x_offset: 0.0,
+        });
+
+        self.sim_consumer = Some(consumer);
+        self.sim_commands = Some(cmd_tx);
+        self.sim_handle = Some(handle);
         self.window = Some(window);
         self.gpu = Some(gpu);
         self.ui = Some(ui);
