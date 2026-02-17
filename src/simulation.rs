@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -6,6 +8,7 @@ use crossbeam_channel::Receiver;
 
 use crate::app::{InputMode, InputState, OscilloscopeState};
 use crate::beam::SampleProducer;
+use crate::simulation_stats::SimStats;
 use crate::types::Resolution;
 
 /// Target batch interval bounds.
@@ -92,7 +95,11 @@ impl SimState {
 
 /// Run the simulation loop on the current thread. Blocks until Shutdown
 /// is received or the command channel is disconnected.
-pub fn run_simulation(mut producer: SampleProducer, commands: Receiver<SimCommand>) {
+pub fn run_simulation(
+    mut producer: SampleProducer,
+    commands: Receiver<SimCommand>,
+    stats: Arc<SimStats>,
+) {
     let _span = tracing::info_span!("sim").entered();
     let mut state = SimState::new();
 
@@ -100,6 +107,10 @@ pub fn run_simulation(mut producer: SampleProducer, commands: Receiver<SimComman
 
     let mut batch_interval = MIN_BATCH_INTERVAL;
     let mut next_tick = Instant::now();
+
+    // Throughput tracking: count samples over a 1-second window
+    let mut samples_this_second: usize = 0;
+    let mut second_timer = Instant::now();
 
     loop {
         // Process all pending commands
@@ -138,8 +149,32 @@ pub fn run_simulation(mut producer: SampleProducer, commands: Receiver<SimComman
         );
 
         // Push into ring buffer (partial write if buffer is near-full)
-        if !samples.is_empty() {
-            producer.push_bulk(&samples);
+        let pushed = if !samples.is_empty() {
+            producer.push_bulk(&samples)
+        } else {
+            0
+        };
+
+        // Track drops
+        let dropped = samples.len().saturating_sub(pushed);
+        if dropped > 0 {
+            stats
+                .samples_dropped
+                .fetch_add(dropped as u32, Ordering::Relaxed);
+            tracing::warn!(dropped, "samples dropped (ring buffer full)");
+        }
+
+        // Update stats
+        samples_this_second += pushed;
+        stats
+            .batch_interval
+            .store(batch_interval.as_secs_f32(), Ordering::Relaxed);
+        if second_timer.elapsed() >= Duration::from_secs(1) {
+            stats
+                .throughput
+                .store(samples_this_second as f32, Ordering::Relaxed);
+            samples_this_second = 0;
+            second_timer = Instant::now();
         }
 
         let gen_elapsed = gen_start.elapsed();
@@ -168,6 +203,7 @@ pub fn run_simulation(mut producer: SampleProducer, commands: Receiver<SimComman
 /// Spawn the simulation thread. Returns a join handle and command sender.
 pub fn spawn_simulation(
     producer: SampleProducer,
+    stats: Arc<SimStats>,
 ) -> (
     thread::JoinHandle<()>,
     crossbeam_channel::Sender<SimCommand>,
@@ -176,7 +212,7 @@ pub fn spawn_simulation(
     let handle = thread::Builder::new()
         .name("phosphor-sim".into())
         .spawn(move || {
-            run_simulation(producer, rx);
+            run_simulation(producer, rx, stats);
         })
         .expect("failed to spawn simulation thread");
     (handle, tx)

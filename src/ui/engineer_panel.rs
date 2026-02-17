@@ -1,9 +1,13 @@
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use phosphor_data::spectral::{SPECTRAL_BANDS, band_center};
 
 use crate::gpu::TAU_CUTOFF;
 use crate::gpu::composite::TonemapMode;
 use crate::gpu::profiler::{HISTORY_CAP, NUM_SEGMENTS, SEGMENT_NAMES, TimingHistory};
 use crate::phosphor::PhosphorType;
+use crate::simulation_stats::SimStats;
 use crate::types::Resolution;
 
 pub struct EngineerState {
@@ -65,6 +69,13 @@ const SEGMENT_COLORS: &[egui::Color32] = &[
     egui::Color32::from_rgb(200, 130, 255), // Composite - purple
 ];
 
+/// Per-frame simulation info passed from the render loop.
+pub struct SimFrameInfo {
+    pub samples_this_frame: usize,
+    pub sim_dt: f32,
+    pub buffer_pending: usize,
+}
+
 pub fn engineer_panel(
     ui: &mut egui::Ui,
     state: &mut EngineerState,
@@ -73,6 +84,8 @@ pub fn engineer_panel(
     fps: f32,
     timings: Option<&TimingHistory>,
     accum_size: Option<Resolution>,
+    sim_stats: Option<&Arc<SimStats>>,
+    sim_frame: Option<&SimFrameInfo>,
 ) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         // -- Phosphor selector (mirrored from scope panel) --
@@ -195,6 +208,44 @@ pub fn engineer_panel(
 
             if history.len() > 1 {
                 gpu_timing_plot(ui, history);
+            }
+        }
+
+        // -- Simulation thread stats --
+        if let Some(stats) = sim_stats {
+            ui.separator();
+            ui.heading("Simulation");
+
+            let throughput = stats.throughput.load(Ordering::Relaxed);
+            let batch_ms = stats.batch_interval.load(Ordering::Relaxed) * 1000.0;
+            let dropped = stats.samples_dropped.load(Ordering::Relaxed);
+            let capacity = stats.buffer_capacity.load(Ordering::Relaxed);
+
+            ui.label(format!("Throughput: {throughput:.0} samples/s"));
+            ui.label(format!("Batch interval: {batch_ms:.2} ms"));
+
+            if let Some(frame) = sim_frame {
+                let fill_pct = if capacity > 0 {
+                    frame.buffer_pending as f32 / capacity as f32 * 100.0
+                } else {
+                    0.0
+                };
+                ui.label(format!(
+                    "Buffer: {} / {} ({fill_pct:.0}%)",
+                    frame.buffer_pending, capacity,
+                ));
+                ui.label(format!(
+                    "Frame: {} samples, sim_dt={:.2} ms",
+                    frame.samples_this_frame,
+                    frame.sim_dt * 1000.0,
+                ));
+            }
+
+            if dropped > 0 {
+                ui.label(
+                    egui::RichText::new(format!("Dropped: {dropped}"))
+                        .color(egui::Color32::from_rgb(255, 100, 100)),
+                );
             }
         }
     });

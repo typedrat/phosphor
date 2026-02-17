@@ -83,6 +83,11 @@ impl SampleProducer {
 }
 
 impl SampleConsumer {
+    /// Number of samples currently waiting in the buffer.
+    pub fn pending(&self) -> usize {
+        self.inner.slots()
+    }
+
     /// Drain all pending samples using zero-copy read_chunk.
     pub fn drain(&mut self) -> Vec<BeamSample> {
         self.drain_up_to(usize::MAX)

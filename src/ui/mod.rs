@@ -5,10 +5,15 @@ use std::path::PathBuf;
 
 use winit::window::Window;
 
+use std::sync::Arc;
+
 use crate::app::{ExternalState, InputMode, OscilloscopeState};
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
+use crate::simulation_stats::SimStats;
 use crate::types::Resolution;
+
+pub use engineer_panel::SimFrameInfo;
 
 pub use engineer_panel::EngineerState;
 
@@ -143,7 +148,13 @@ impl UiState {
         self.winit_state.on_window_event(window, event)
     }
 
-    pub fn run(&mut self, window: &Window, timings: Option<&TimingHistory>) -> EguiRenderOutput {
+    pub fn run(
+        &mut self,
+        window: &Window,
+        timings: Option<&TimingHistory>,
+        sim_stats: Option<&Arc<SimStats>>,
+        sim_frame: Option<&SimFrameInfo>,
+    ) -> EguiRenderOutput {
         let raw_input = self.winit_state.take_egui_input(window);
         let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
 
@@ -190,6 +201,8 @@ impl UiState {
                                     fps,
                                     timings,
                                     self.accum_size,
+                                    sim_stats,
+                                    sim_frame,
                                 );
                             }
                         }
@@ -231,6 +244,8 @@ impl UiState {
         window: &Window,
         egui_winit: &mut egui_winit::State,
         timings: Option<&TimingHistory>,
+        sim_stats: Option<&Arc<SimStats>>,
+        sim_frame: Option<&SimFrameInfo>,
     ) -> EguiRenderOutput {
         let raw_input = egui_winit.take_egui_input(window);
         let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
@@ -267,6 +282,8 @@ impl UiState {
                             fps,
                             timings,
                             self.accum_size,
+                            sim_stats,
+                            sim_frame,
                         );
                     }
                 }

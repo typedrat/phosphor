@@ -5,6 +5,7 @@ mod beam;
 mod gpu;
 mod phosphor;
 mod simulation;
+mod simulation_stats;
 mod types;
 mod ui;
 
@@ -19,8 +20,9 @@ use winit::window::{Window, WindowId};
 use beam::SampleConsumer;
 use gpu::GpuState;
 use simulation::SimCommand;
+use simulation_stats::SimStats;
 use types::Resolution;
-use ui::UiState;
+use ui::{SimFrameInfo, UiState};
 
 #[derive(Default, PartialEq)]
 enum WindowMode {
@@ -128,6 +130,7 @@ struct App {
     sim_consumer: Option<SampleConsumer>,
     sim_commands: Option<crossbeam_channel::Sender<SimCommand>>,
     sim_handle: Option<std::thread::JoinHandle<()>>,
+    sim_stats: Option<Arc<SimStats>>,
     sample_rate: f32,
 }
 
@@ -144,6 +147,7 @@ impl Default for App {
             sim_consumer: None,
             sim_commands: None,
             sim_handle: None,
+            sim_stats: None,
             sample_rate: 44100.0,
         }
     }
@@ -265,10 +269,22 @@ impl App {
                     samples.len() as f32 / self.sample_rate
                 };
 
+                // Build per-frame simulation info for the engineer panel
+                let sim_frame_info = SimFrameInfo {
+                    samples_this_frame: samples.len(),
+                    sim_dt,
+                    buffer_pending: self.sim_consumer.as_ref().map_or(0, |c| c.pending()),
+                };
+
                 // Run egui frame only in Combined mode
                 let egui_output = if self.mode == WindowMode::Combined {
                     let timings = gpu.profiler.as_ref().map(|p| &p.history);
-                    Some(ui.run(window, timings))
+                    Some(ui.run(
+                        window,
+                        timings,
+                        self.sim_stats.as_ref(),
+                        Some(&sim_frame_info),
+                    ))
                 } else {
                     None
                 };
@@ -403,7 +419,13 @@ impl App {
 
         // Run egui in detached mode
         let timings = gpu.profiler.as_ref().map(|p| &p.history);
-        let egui_output = ui.run_detached(&controls.window, &mut controls.egui_winit, timings);
+        let egui_output = ui.run_detached(
+            &controls.window,
+            &mut controls.egui_winit,
+            timings,
+            self.sim_stats.as_ref(),
+            None, // sim_frame only available during viewport redraw
+        );
 
         // Update egui textures
         for (id, delta) in &egui_output.textures_delta.set {
@@ -499,8 +521,10 @@ impl ApplicationHandler for App {
         gpu.switch_phosphor(ui.selected_phosphor());
 
         // Spawn simulation thread
-        let (producer, consumer) = crate::beam::sample_channel(65536);
-        let (handle, cmd_tx) = crate::simulation::spawn_simulation(producer);
+        let buffer_capacity = 65536;
+        let (producer, consumer) = crate::beam::sample_channel(buffer_capacity);
+        let stats = SimStats::new(buffer_capacity as u32);
+        let (handle, cmd_tx) = crate::simulation::spawn_simulation(producer, stats.clone());
 
         // Send initial viewport dimensions
         let size = window.inner_size();
@@ -513,6 +537,7 @@ impl ApplicationHandler for App {
         self.sim_consumer = Some(consumer);
         self.sim_commands = Some(cmd_tx);
         self.sim_handle = Some(handle);
+        self.sim_stats = Some(stats);
         self.window = Some(window);
         self.gpu = Some(gpu);
         self.ui = Some(ui);
