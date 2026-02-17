@@ -102,6 +102,8 @@ Supports combined (single window) and detached (CRT viewport + controls as separ
 src/
   main.rs              — entry point, window creation, event loop, multi-window
   app.rs               — InputState, per-mode state (oscilloscope, audio, vector, external)
+  simulation.rs        — simulation thread loop, SimCommand, adaptive batching
+  simulation_stats.rs  — lock-free atomic stats shared between sim and render threads
   types.rs             — Resolution type
   phosphor/
     mod.rs             — phosphor database (compile-time baked + runtime loading)
@@ -153,6 +155,10 @@ data/
 | `glam`                                     | Vector/matrix math                              |
 | `bytemuck`                                 | Zero-copy GPU buffer casting                    |
 | `rtrb`                                     | Lock-free SPSC ring buffer for beam samples     |
+| `crossbeam-channel`                        | MPSC command channel (render → sim thread)      |
+| `spin_sleep`                               | High-resolution thread sleep for sim pacing     |
+| `atomic_float`                             | Lock-free AtomicF32 for shared stats            |
+| `tracing` + `tracing-subscriber`           | Structured, thread-aware logging                |
 | `nom`                                      | Parser combinators for external protocol        |
 | `strum`                                    | Enum derive macros (Display, EnumCount, etc.)   |
 | `rfd`                                      | Native file dialogs                             |
@@ -172,7 +178,8 @@ data/
 
 ## Threading Model
 
-- **Main thread**: winit event loop, egui rendering, GPU command submission, beam sample generation
-- Input sources run synchronously on the main thread during `RedrawRequested`, generating samples for the current frame
-- Frame pacing via `ControlFlow::WaitUntil` at the monitor's native refresh rate (queried from `current_monitor().refresh_rate_millihertz()`). This is necessary because `PresentMode::AutoVsync` (Mailbox) doesn't reliably throttle the event loop on all Linux Vulkan compositors. Beam sample count per frame is `sample_rate * dt`, so stable frame pacing is critical for smooth traces.
-- SPSC ring buffer (`rtrb`) available for future threaded input sources
+- **Main/render thread**: winit event loop, egui rendering, GPU command submission, drains beam samples from ring buffer each frame
+- **Simulation thread**: Runs a fixed-rate loop generating beam samples via `InputState::generate_samples_fixed()`. Adaptive batch interval (1–10ms) scales with generation cost. Pushes samples into SPSC ring buffer (`rtrb`).
+- **Communication**: `SimCommand` enum sent via `crossbeam-channel` (render → sim) for parameter updates. `SimStats` (lock-free atomics) for sim → render observability (throughput, batch interval, dropped samples, buffer fill).
+- **Sample flow**: Sim thread pushes `BeamSample` into rtrb ring buffer → render thread drains up to 2× frame interval worth of samples per frame → passes to GPU beam write pass. `sim_dt = drained_count / sample_rate` drives decay timing.
+- Frame pacing via `ControlFlow::WaitUntil` at the monitor's native refresh rate (queried from `current_monitor().refresh_rate_millihertz()`). This is necessary because `PresentMode::AutoVsync` (Mailbox) doesn't reliably throttle the event loop on all Linux Vulkan compositors.
