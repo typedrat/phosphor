@@ -19,7 +19,7 @@
 description = "Medium persistence green. Standard general-purpose oscilloscope phosphor."
 category = "general_purpose"
 peak_nm = 525.0
-fwhm_nm = 38.0
+spectrum_csv = "spectra/p1_willemite.csv"
 relative_luminance = 50.0
 relative_writing_speed = 60.0
 

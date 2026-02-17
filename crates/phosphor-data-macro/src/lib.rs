@@ -100,7 +100,11 @@ pub fn phosphor_table(input: TokenStream) -> TokenStream {
     let contents = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
 
-    let phosphors = phosphor_data::load_phosphors(&contents)
+    let base_path = path
+        .parent()
+        .unwrap_or_else(|| panic!("Cannot determine parent directory of {}", path.display()));
+
+    let phosphors = phosphor_data::load_phosphors_with_base_path(&contents, Some(base_path))
         .unwrap_or_else(|e| panic!("Failed to parse {}: {e}", path.display()));
 
     let entries: Vec<String> = phosphors.iter().map(format_phosphor).collect();

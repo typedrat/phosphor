@@ -1,0 +1,86 @@
+# P1 Phosphor (Zn2SiO4:Mn2+, Willemite) Emission Spectrum Data
+# REVISED — re-digitized from modern spectrophotometry
+#
+# Primary source for spectral shape:
+#   Kamiya, S. and Mizuno, H., unpublished results.
+#   As reproduced in: Shionoya, S. et al., "Phosphor Handbook",
+#   Figure 32, curve (a): Emission spectrum of Zn2SiO4:Mn2+.
+#   This is linear-intensity spectrophotometry, far more reliable
+#   than the 1950s film-densitometer traces used in the prior version.
+#
+# Corroborating sources:
+#   [KS1950] Klick & Schulman, J. Opt. Soc. Am. 40(8), 1950.
+#            Confirms peak at ~525 nm, single emission band, no sub-bands.
+#   [S2003]  Selomulya et al., Mater. Sci. Eng. B100 (2003) 136-141.
+#            Confirms peak at 525 nm, transition 4T1(4G)->6A1(6S),
+#            excitation at 245 nm, average decay lifetime 8.233 ms.
+#
+# Physical parameters:
+#   Compound:    Zn2SiO4:Mn2+ (Willemite, rhombohedral)
+#   JEDEC:       P1
+#   Transition:  4T1(4G) -> 6A1(6S) of Mn2+ in tetrahedral site
+#   Peak:        525 nm (2.362 eV)
+#   FWHM:        ~38 nm (~0.170 eV)
+#   Excitation:  245 nm optimal (charge transfer to CB)
+#   Decay:       ~8.2 ms average (double exponential)
+#   Temperature: Room temperature (300K)
+#
+# The band is approximately Gaussian in wavelength space. Any
+# asymmetry is subtle at room temperature — a symmetric Gaussian
+# centered at 525 nm with FWHM 38 nm is a reasonable model.
+#
+wavelength_nm,wavelength_angstrom,energy_eV,rel_intensity
+440,4400,2.818,0
+450,4500,2.756,0
+455,4550,2.725,0.5
+460,4600,2.696,1
+465,4650,2.667,1.5
+470,4700,2.638,3
+475,4750,2.610,5
+480,4800,2.583,8
+485,4850,2.557,12
+490,4900,2.531,17
+495,4950,2.505,24
+500,5000,2.480,33
+503,5030,2.466,39
+505,5050,2.455,43
+507,5070,2.446,48
+509,5090,2.436,53
+510,5100,2.431,56
+512,5120,2.422,62
+514,5140,2.412,68
+516,5160,2.403,74
+518,5180,2.394,80
+520,5200,2.385,86
+522,5220,2.375,91
+523,5230,2.371,93
+524,5240,2.366,96
+525,5250,2.362,98
+526,5260,2.357,100
+527,5270,2.353,100
+528,5280,2.348,99
+530,5300,2.340,96
+532,5320,2.331,92
+534,5340,2.322,87
+536,5360,2.313,81
+538,5380,2.304,74
+540,5400,2.296,67
+542,5420,2.287,60
+544,5440,2.279,53
+546,5460,2.271,46
+548,5480,2.263,39
+550,5500,2.255,33
+553,5530,2.242,26
+555,5550,2.234,22
+558,5580,2.222,17
+560,5600,2.214,14
+563,5630,2.203,10
+565,5650,2.195,8
+568,5680,2.183,6
+570,5700,2.175,4.5
+575,5750,2.156,2.5
+580,5800,2.138,1.5
+585,5850,2.120,0.8
+590,5900,2.102,0.3
+595,5950,2.084,0.1
+600,6000,2.067,0
