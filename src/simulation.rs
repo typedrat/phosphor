@@ -105,6 +105,7 @@ pub fn run_simulation(
 
     // Throughput tracking: count samples over a 1-second window
     let mut samples_this_second: usize = 0;
+    let mut generated_this_second: usize = 0;
     let mut second_timer = Instant::now();
 
     loop {
@@ -162,12 +163,16 @@ pub fn run_simulation(
 
         // Update stats
         samples_this_second += pushed;
+        generated_this_second += batch_size;
         stats
             .batch_interval
             .store(batch_interval.as_secs_f32(), Ordering::Relaxed);
         if second_timer.elapsed() >= Duration::from_secs(1) {
             let throughput = samples_this_second as f32;
             stats.throughput.store(throughput, Ordering::Relaxed);
+            stats
+                .samples_generated
+                .store(generated_this_second as f32, Ordering::Relaxed);
 
             // If throughput fell below 90% of target, grow the batch interval
             // so each iteration produces more samples, amortizing loop overhead.
@@ -176,6 +181,7 @@ pub fn run_simulation(
             }
 
             samples_this_second = 0;
+            generated_this_second = 0;
             second_timer = Instant::now();
         }
 

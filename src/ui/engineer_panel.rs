@@ -189,17 +189,18 @@ pub fn engineer_panel(
 
         ui.separator();
 
-        // -- Stats --
-        ui.heading("Stats");
+        // -- Render Information --
+        ui.heading("Render Information");
         ui.label(format!("FPS: {fps:.0}"));
 
         if let Some(history) = timings {
             const AVG_WINDOW: usize = 32;
 
+            let beam_avg = (history.avg_beam_samples(AVG_WINDOW) / 10.0).round() as u32 * 10;
             ui.label(format!(
-                "GPU: {} ms  |  Beam samples: {}",
+                "GPU: {} ms  |  Beam samples/frame: {}",
                 fmt_ms(history.avg_total(AVG_WINDOW)),
-                (history.avg_beam_samples(AVG_WINDOW) / 10.0).round() as u32 * 10,
+                beam_avg,
             ));
 
             if let Some(segs) = history.avg_segments(AVG_WINDOW) {
@@ -222,11 +223,13 @@ pub fn engineer_panel(
             ui.heading("Simulation");
 
             let throughput = stats.throughput.load(Ordering::Relaxed);
+            let generated = stats.samples_generated.load(Ordering::Relaxed);
             let batch_ms = stats.batch_interval.load(Ordering::Relaxed) * 1000.0;
             let dropped = stats.samples_dropped.load(Ordering::Relaxed);
             let capacity = stats.buffer_capacity.load(Ordering::Relaxed);
 
-            ui.label(format!("Throughput: {throughput:.0} samples/s"));
+            ui.label(format!("Generated: {generated:.0} samples/s"));
+            ui.label(format!("After resample: {throughput:.0} samples/s"));
             ui.label(format!("Batch interval: {batch_ms:.2} ms"));
 
             if let Some(frame) = sim_frame {
