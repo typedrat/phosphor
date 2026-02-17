@@ -53,7 +53,10 @@ pub struct PhosphorType {
 #[derive(Debug, Deserialize)]
 struct LayerData {
     peak_nm: f32,
-    fwhm_nm: f32,
+    #[serde(default)]
+    fwhm_nm: Option<f32>,
+    #[serde(default)]
+    spectrum_csv: Option<String>,
     #[serde(default)]
     decay_terms: Vec<DecayTerm>,
 }
@@ -67,6 +70,8 @@ struct PhosphorData {
     peak_nm: f32,
     #[serde(default)]
     fwhm_nm: Option<f32>,
+    #[serde(default)]
+    spectrum_csv: Option<String>,
     #[serde(default)]
     decay_terms: Vec<DecayTerm>,
     relative_luminance: f32,
@@ -85,14 +90,37 @@ fn parse_category(s: &str) -> PhosphorCategory {
     }
 }
 
-fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
-    let make_layer = |peak: f32, fwhm: f32, terms: &[DecayTerm]| -> PhosphorLayer {
-        PhosphorLayer {
-            emission_weights: spectral::gaussian_emission_weights(peak, fwhm),
-            decay_terms: terms.to_vec(),
-        }
-    };
+fn resolve_emission_weights(
+    peak_nm: f32,
+    fwhm_nm: Option<f32>,
+    spectrum_csv: Option<&str>,
+    base_path: Option<&Path>,
+    designation: &str,
+) -> [f32; SPECTRAL_BANDS] {
+    if let Some(csv_rel) = spectrum_csv {
+        let base = base_path.unwrap_or_else(|| {
+            panic!("{designation}: spectrum_csv requires a base path for resolution")
+        });
+        let csv_path = base.join(csv_rel);
+        let csv_text = std::fs::read_to_string(&csv_path).unwrap_or_else(|e| {
+            panic!("{designation}: failed to read {}: {e}", csv_path.display())
+        });
+        spectral::csv_to_emission_weights(&csv_text).unwrap_or_else(|e| {
+            panic!("{designation}: failed to parse {}: {e}", csv_path.display())
+        })
+    } else {
+        let fwhm = fwhm_nm.unwrap_or_else(|| {
+            panic!("{designation}: need fwhm_nm or spectrum_csv for emission weights")
+        });
+        spectral::gaussian_emission_weights(peak_nm, fwhm)
+    }
+}
 
+fn build_phosphor(
+    designation: &str,
+    data: &PhosphorData,
+    base_path: Option<&Path>,
+) -> PhosphorType {
     let (fluorescence, phosphorescence, is_dual_layer) = if data.dual_layer {
         let fl = data.fluorescence.as_ref().unwrap_or_else(|| {
             panic!("{designation}: dual_layer = true but missing [fluorescence]")
@@ -111,15 +139,39 @@ fn build_phosphor(designation: &str, data: &PhosphorData) -> PhosphorType {
             &ph.decay_terms
         };
         (
-            make_layer(fl.peak_nm, fl.fwhm_nm, fl_terms),
-            make_layer(ph.peak_nm, ph.fwhm_nm, ph_terms),
+            PhosphorLayer {
+                emission_weights: resolve_emission_weights(
+                    fl.peak_nm,
+                    fl.fwhm_nm,
+                    fl.spectrum_csv.as_deref(),
+                    base_path,
+                    designation,
+                ),
+                decay_terms: fl_terms.to_vec(),
+            },
+            PhosphorLayer {
+                emission_weights: resolve_emission_weights(
+                    ph.peak_nm,
+                    ph.fwhm_nm,
+                    ph.spectrum_csv.as_deref(),
+                    base_path,
+                    designation,
+                ),
+                decay_terms: ph_terms.to_vec(),
+            },
             true,
         )
     } else {
-        let fwhm = data
-            .fwhm_nm
-            .unwrap_or_else(|| panic!("{designation}: single-layer phosphor missing fwhm_nm"));
-        let layer = make_layer(data.peak_nm, fwhm, &data.decay_terms);
+        let layer = PhosphorLayer {
+            emission_weights: resolve_emission_weights(
+                data.peak_nm,
+                data.fwhm_nm,
+                data.spectrum_csv.as_deref(),
+                base_path,
+                designation,
+            ),
+            decay_terms: data.decay_terms.to_vec(),
+        };
         (layer.clone(), layer, false)
     };
 
@@ -188,21 +240,33 @@ pub fn classify_decay_terms(terms: &[DecayTerm], tau_cutoff: f32) -> DecayClassi
     }
 }
 
-/// Parse phosphor definitions from a TOML string.
-pub fn load_phosphors(toml_str: &str) -> Result<Vec<PhosphorType>, toml::de::Error> {
+/// Parse phosphor definitions from a TOML string, resolving any `spectrum_csv`
+/// paths relative to `base_path`.
+pub fn load_phosphors_with_base_path(
+    toml_str: &str,
+    base_path: Option<&Path>,
+) -> Result<Vec<PhosphorType>, toml::de::Error> {
     let table: BTreeMap<String, PhosphorData> = toml::from_str(toml_str)?;
     Ok(table
         .iter()
-        .map(|(name, data)| build_phosphor(name, data))
+        .map(|(name, data)| build_phosphor(name, data, base_path))
         .collect())
 }
 
+/// Parse phosphor definitions from a TOML string.
+pub fn load_phosphors(toml_str: &str) -> Result<Vec<PhosphorType>, toml::de::Error> {
+    load_phosphors_with_base_path(toml_str, None)
+}
+
 /// Load phosphor definitions from a TOML file on disk.
+///
+/// Any `spectrum_csv` paths are resolved relative to the TOML file's parent directory.
 pub fn load_phosphors_from_file(
     path: &Path,
 ) -> Result<Vec<PhosphorType>, Box<dyn std::error::Error>> {
     let contents = std::fs::read_to_string(path)?;
-    Ok(load_phosphors(&contents)?)
+    let base = path.parent().unwrap_or(Path::new("."));
+    Ok(load_phosphors_with_base_path(&contents, Some(base))?)
 }
 
 #[cfg(test)]
@@ -334,6 +398,120 @@ tau = 31.8e-9
         assert_eq!(class.instant_exp_count, 0);
         assert_eq!(class.slow_exp_count, 2);
         assert!(!class.has_power_law);
+    }
+
+    #[test]
+    fn spectrum_csv_field_parsed_from_toml() {
+        let toml_str = r#"
+[P1]
+description = "Test with CSV."
+category = "general_purpose"
+peak_nm = 525.0
+spectrum_csv = "spectra/test.csv"
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.003
+"#;
+        let table: std::collections::BTreeMap<String, PhosphorData> =
+            toml::from_str(toml_str).unwrap();
+        let p1 = &table["P1"];
+        assert_eq!(p1.spectrum_csv.as_deref(), Some("spectra/test.csv"));
+    }
+
+    #[test]
+    fn spectrum_csv_field_absent_is_none() {
+        let toml_str = r#"
+[P1]
+description = "Test without CSV."
+category = "general_purpose"
+peak_nm = 525.0
+fwhm_nm = 38.0
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[[P1.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.003
+"#;
+        let table: std::collections::BTreeMap<String, PhosphorData> =
+            toml::from_str(toml_str).unwrap();
+        let p1 = &table["P1"];
+        assert!(p1.spectrum_csv.is_none());
+    }
+
+    #[test]
+    fn build_phosphor_uses_csv_when_present() {
+        let csv_content = "\
+wavelength_nm,rel_intensity
+500,0
+520,0
+525,100
+530,0
+560,0
+";
+        let dir = std::env::temp_dir().join("phosphor_test_csv");
+        let _ = std::fs::create_dir_all(dir.join("spectra"));
+        std::fs::write(dir.join("spectra/test.csv"), csv_content).unwrap();
+
+        let toml_str = r#"
+[TestCSV]
+description = "Test with CSV spectrum."
+category = "general_purpose"
+peak_nm = 525.0
+spectrum_csv = "spectra/test.csv"
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[[TestCSV.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.003
+"#;
+        let phosphors = load_phosphors_with_base_path(toml_str, Some(&dir)).unwrap();
+        let p = &phosphors[0];
+
+        let sum: f32 = p.fluorescence.emission_weights.iter().sum();
+        assert!((sum - 1.0).abs() < 0.01, "sum was {sum}");
+
+        let peak_band = p
+            .fluorescence
+            .emission_weights
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        let (lo, hi) = spectral::band_range(peak_band);
+        assert!(525.0 >= lo && 525.0 < hi);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_phosphor_falls_back_to_gaussian_without_csv() {
+        let toml_str = r#"
+[TestGauss]
+description = "Test without CSV."
+category = "general_purpose"
+peak_nm = 525.0
+fwhm_nm = 38.0
+relative_luminance = 50.0
+relative_writing_speed = 60.0
+
+[[TestGauss.decay_terms]]
+type = "exponential"
+amplitude = 1.0
+tau = 0.003
+"#;
+        let phosphors = load_phosphors_with_base_path(toml_str, None).unwrap();
+        let p = &phosphors[0];
+        let expected = spectral::gaussian_emission_weights(525.0, 38.0);
+        assert_eq!(p.fluorescence.emission_weights, expected);
     }
 
     #[test]
