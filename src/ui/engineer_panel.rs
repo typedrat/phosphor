@@ -178,7 +178,7 @@ pub fn engineer_panel(
         // -- Resolution --
         ui.heading("Resolution");
         ui.label("Accum buffer scale");
-        ui.add(egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=2.0).text("x"));
+        ui.add(egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=4.0).text("x"));
         if let Some(res) = accum_size {
             ui.label(res.to_string());
         }
