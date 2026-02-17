@@ -1,6 +1,6 @@
 pub mod spectral;
 
-pub use phosphor_data::{PhosphorCategory, PhosphorLayer, PhosphorType};
+pub use phosphor_data::PhosphorType;
 
 /// Built-in phosphor database, baked at compile time from data/phosphors.toml.
 /// Returned sorted by designation in natural order (P1 < P2 < P10).

@@ -1,7 +1,10 @@
 pub use phosphor_data::spectral::{
     BAND_WIDTH, SPECTRAL_BANDS, WAVELENGTH_MAX, WAVELENGTH_MIN, band_center, band_range,
-    gaussian_emission_weights,
 };
+
+// Re-exported for tests; not used in non-test code paths within this crate.
+#[cfg(test)]
+pub use phosphor_data::spectral::gaussian_emission_weights;
 
 /// CIE 1931 2-degree standard observer color matching functions.
 /// 1nm steps, 360-830nm. Each entry: (wavelength_nm, x_bar, y_bar, z_bar).

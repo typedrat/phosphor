@@ -8,7 +8,7 @@ pub mod spectral_resolve;
 
 use std::sync::Arc;
 
-use phosphor_data::spectral::SPECTRAL_BANDS;
+use crate::phosphor::spectral::SPECTRAL_BANDS;
 
 /// Time constant cutoff for classifying decay terms into tiers.
 /// Exponentials with tau < TAU_CUTOFF are "instantaneous" (tier 1),

@@ -1,9 +1,8 @@
 use std::path::PathBuf;
-use std::time::Instant;
 
 use crate::beam::audio::AudioSource;
 use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource, Waveform};
-use crate::beam::vector::{VectorSegment, VectorSource};
+use crate::beam::vector::VectorSegment;
 use crate::beam::{BeamSample, BeamSource, BeamState};
 use crate::types::Resolution;
 
@@ -131,7 +130,6 @@ pub struct InputState {
     pub vector: VectorState,
     pub external: ExternalState,
     osc_source: OscilloscopeSource,
-    last_generate: Instant,
 }
 
 impl Default for InputState {
@@ -162,109 +160,11 @@ impl Default for InputState {
             vector: VectorState::default(),
             external: ExternalState::default(),
             osc_source,
-            last_generate: Instant::now(),
         }
     }
 }
 
 impl InputState {
-    pub fn generate_samples(
-        &mut self,
-        focus: f32,
-        aspect: f32,
-        accum_resolution: Resolution,
-    ) -> Vec<BeamSample> {
-        let now = Instant::now();
-        let dt = now
-            .duration_since(self.last_generate)
-            .as_secs_f32()
-            .min(0.1);
-        self.last_generate = now;
-
-        // Convert beam sigma from pixel space to normalized [0,1] coordinates
-        // using the accumulation buffer's actual dimensions.
-        let spot_radius = focus / accum_resolution.width.max(1) as f32;
-
-        let beam = BeamState { spot_radius };
-
-        let mut samples = match self.mode {
-            InputMode::Oscilloscope => {
-                self.sync_oscilloscope_params();
-                let count = (self.oscilloscope.sample_rate * dt) as usize;
-                if count == 0 {
-                    return Vec::new();
-                }
-                self.osc_source.generate(count, &beam)
-            }
-            InputMode::Audio => {
-                let audio = &mut self.audio;
-                if !audio.playing {
-                    return Vec::new();
-                }
-                let Some(source) = &mut audio.source else {
-                    return Vec::new();
-                };
-                let sample_rate = source.sample_rate() as f32;
-                let count = (sample_rate * dt * audio.speed) as usize;
-                if count == 0 {
-                    return Vec::new();
-                }
-                let samples = source.generate(count, &beam);
-                if source.is_finished() {
-                    if audio.looping {
-                        source.seek(0.0);
-                    } else {
-                        audio.playing = false;
-                    }
-                }
-                samples
-            }
-            InputMode::Vector => {
-                if self.vector.segments.is_empty() {
-                    return Vec::new();
-                }
-                let mut src = VectorSource {
-                    segments: self.vector.segments.clone(),
-                    beam_speed: self.vector.beam_speed,
-                    settling_time: self.vector.settling_time,
-                };
-                src.generate(0, &beam)
-            }
-            InputMode::External => {
-                // Placeholder — real stdin/socket wiring is a later task
-                Vec::new()
-            }
-        };
-
-        // Aspect ratio correction: compress the wider axis so that equal
-        // deflection amplitudes produce equal physical distances on screen.
-        // This makes a sine/cosine Lissajous appear as a circle, not an ellipse.
-        if aspect > 1.0 {
-            // Wider than tall: compress X around center
-            for s in &mut samples {
-                s.x = 0.5 + (s.x - 0.5) / aspect;
-            }
-        } else if aspect < 1.0 {
-            // Taller than wide: compress Y around center
-            for s in &mut samples {
-                s.y = 0.5 + (s.y - 0.5) * aspect;
-            }
-        }
-
-        // Arc-length resample: decouple energy deposition from input sample
-        // rate. At high sample rates, consecutive samples are closer than the
-        // beam radius, causing periodic brightness modulation. Merge short
-        // segments so depositions occur at ~0.5× beam sigma intervals.
-        let mut samples = crate::beam::resample::arc_length_resample(&samples, spot_radius * 0.5);
-
-        // Scale beam energy to visible levels
-        for s in &mut samples {
-            s.intensity *= BEAM_ENERGY_SCALE;
-        }
-
-        samples
-    }
-
     /// Generate a fixed number of samples at the given sample rate.
     /// Unlike `generate_samples`, this does NOT measure wall-clock time —
     /// dt is always `1/sample_rate`, making output deterministic.

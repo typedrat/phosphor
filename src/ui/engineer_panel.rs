@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use phosphor_data::spectral::{SPECTRAL_BANDS, band_center};
+use crate::phosphor::spectral::{SPECTRAL_BANDS, band_center};
 
 use crate::gpu::TAU_CUTOFF;
 use crate::gpu::composite::TonemapMode;
@@ -76,6 +76,7 @@ pub struct SimFrameInfo {
     pub buffer_pending: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn engineer_panel(
     ui: &mut egui::Ui,
     state: &mut EngineerState,
@@ -263,7 +264,7 @@ fn fmt_ms(us: f32) -> String {
 fn emission_spectrum_plot(ui: &mut egui::Ui, phosphor: &PhosphorType) {
     use egui_plot::{Line, Plot, PlotPoints};
 
-    use phosphor_data::spectral::{WAVELENGTH_MAX, WAVELENGTH_MIN};
+    use crate::phosphor::spectral::{WAVELENGTH_MAX, WAVELENGTH_MIN};
     let plot = Plot::new("emission_spectrum")
         .height(100.0)
         .include_x(WAVELENGTH_MIN as f64)

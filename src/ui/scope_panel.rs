@@ -5,6 +5,7 @@ use crate::phosphor::PhosphorType;
 
 use super::{AudioUiState, VectorUiState};
 
+#[allow(clippy::too_many_arguments)]
 pub fn scope_panel(
     ui: &mut egui::Ui,
     phosphors: &[PhosphorType],
