@@ -25,7 +25,7 @@ pub trait BeamSource {
 
 /// A single beam position sample.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BeamSample {
     pub x: f32,
     pub y: f32,
@@ -53,22 +53,55 @@ pub fn sample_channel(capacity: usize) -> (SampleProducer, SampleConsumer) {
 }
 
 impl SampleProducer {
-    /// Push a sample into the channel. Returns `true` if successful,
-    /// `false` if the buffer is full (sample is dropped).
+    /// Push a single sample. Returns `true` if successful, `false` if full.
     pub fn push(&mut self, sample: BeamSample) -> bool {
         self.inner.push(sample).is_ok()
+    }
+
+    /// Bulk-push samples using zero-copy write_chunk. Returns the number
+    /// of samples actually written (may be less than `samples.len()` if
+    /// the buffer doesn't have enough free slots).
+    pub fn push_bulk(&mut self, samples: &[BeamSample]) -> usize {
+        let available = self.inner.slots();
+        let n = samples.len().min(available);
+        if n == 0 {
+            return 0;
+        }
+        if let Ok(mut chunk) = self.inner.write_chunk(n) {
+            let (first, second) = chunk.as_mut_slices();
+            let first_len = first.len();
+            first.copy_from_slice(&samples[..first_len]);
+            if !second.is_empty() {
+                second.copy_from_slice(&samples[first_len..n]);
+            }
+            chunk.commit_all();
+            n
+        } else {
+            0
+        }
     }
 }
 
 impl SampleConsumer {
-    /// Drain all pending samples from the channel.
+    /// Drain all pending samples using zero-copy read_chunk.
     pub fn drain(&mut self) -> Vec<BeamSample> {
-        let count = self.inner.slots();
+        self.drain_up_to(usize::MAX)
+    }
+
+    /// Drain up to `max` pending samples using zero-copy read_chunk.
+    /// Any samples beyond `max` remain in the buffer for the next call.
+    pub fn drain_up_to(&mut self, max: usize) -> Vec<BeamSample> {
+        let available = self.inner.slots();
+        let count = available.min(max);
         if count == 0 {
             return Vec::new();
         }
         let chunk = self.inner.read_chunk(count).unwrap();
-        let samples: Vec<BeamSample> = chunk.into_iter().collect();
+        let (first, second) = chunk.as_slices();
+        let mut samples = Vec::with_capacity(count);
+        samples.extend_from_slice(first);
+        samples.extend_from_slice(second);
+        chunk.commit_all();
         samples
     }
 }
@@ -149,5 +182,71 @@ mod tests {
         fn assert_send<T: Send>() {}
         assert_send::<SampleProducer>();
         assert_send::<SampleConsumer>();
+    }
+
+    #[test]
+    fn bulk_push_and_drain() {
+        let (mut tx, mut rx) = sample_channel(128);
+        let samples: Vec<BeamSample> = (0..50)
+            .map(|i| BeamSample {
+                x: i as f32 * 0.01,
+                y: 0.5,
+                intensity: 1.0,
+                dt: 0.001,
+            })
+            .collect();
+
+        let pushed = tx.push_bulk(&samples);
+        assert_eq!(pushed, 50);
+
+        let drained = rx.drain();
+        assert_eq!(drained.len(), 50);
+        assert!((drained[0].x - 0.0).abs() < f32::EPSILON);
+        assert!((drained[49].x - 0.49).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn bulk_push_partial_when_full() {
+        let (mut tx, mut rx) = sample_channel(4);
+        let samples: Vec<BeamSample> = (0..10)
+            .map(|_| BeamSample {
+                x: 0.5,
+                y: 0.5,
+                intensity: 1.0,
+                dt: 0.001,
+            })
+            .collect();
+
+        let pushed = tx.push_bulk(&samples);
+        assert_eq!(pushed, 4); // only 4 slots available
+
+        assert_eq!(rx.drain().len(), 4);
+    }
+
+    #[test]
+    fn drain_up_to_respects_cap() {
+        let (mut tx, mut rx) = sample_channel(128);
+        let samples: Vec<BeamSample> = (0..100)
+            .map(|i| BeamSample {
+                x: i as f32 * 0.01,
+                y: 0.5,
+                intensity: 1.0,
+                dt: 0.001,
+            })
+            .collect();
+
+        tx.push_bulk(&samples);
+
+        // Drain only 30 — 70 should remain
+        let first = rx.drain_up_to(30);
+        assert_eq!(first.len(), 30);
+
+        // Drain the rest
+        let second = rx.drain_up_to(1000);
+        assert_eq!(second.len(), 70);
+
+        // Nothing left
+        let third = rx.drain_up_to(10);
+        assert_eq!(third.len(), 0);
     }
 }
