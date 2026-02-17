@@ -123,6 +123,7 @@ pub fn run_simulation(
             {
                 producer = new_prod;
                 state.sample_rate = rate;
+                tracing::info!(sample_rate = rate, "sample rate changed");
                 continue;
             }
             state.apply_command(cmd);
@@ -165,9 +166,15 @@ pub fn run_simulation(
             .batch_interval
             .store(batch_interval.as_secs_f32(), Ordering::Relaxed);
         if second_timer.elapsed() >= Duration::from_secs(1) {
-            stats
-                .throughput
-                .store(samples_this_second as f32, Ordering::Relaxed);
+            let throughput = samples_this_second as f32;
+            stats.throughput.store(throughput, Ordering::Relaxed);
+
+            // If throughput fell below 90% of target, grow the batch interval
+            // so each iteration produces more samples, amortizing loop overhead.
+            if throughput < state.sample_rate * 0.9 {
+                batch_interval = (batch_interval * 2).min(MAX_BATCH_INTERVAL);
+            }
+
             samples_this_second = 0;
             second_timer = Instant::now();
         }

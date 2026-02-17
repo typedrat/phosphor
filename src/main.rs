@@ -329,6 +329,18 @@ impl App {
                         ui.vector_ui.file_path = Some(path.clone());
                         let _ = tx.send(SimCommand::LoadVectorFile(path));
                     }
+
+                    // Sample rate change — recreate the ring buffer
+                    if ui.oscilloscope.sample_rate != self.sample_rate {
+                        self.sample_rate = ui.oscilloscope.sample_rate;
+                        let capacity = (self.sample_rate as usize * 3 / 2).next_power_of_two();
+                        let (producer, consumer) = crate::beam::sample_channel(capacity);
+                        self.sim_consumer = Some(consumer);
+                        let _ = tx.send(SimCommand::SetSampleRate {
+                            rate: self.sample_rate,
+                            producer,
+                        });
+                    }
                 }
 
                 match gpu.render(&samples, sim_dt, egui_output.as_ref()) {
