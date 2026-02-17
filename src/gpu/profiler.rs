@@ -191,6 +191,21 @@ impl TimingHistory {
         }))
     }
 
+    pub fn avg_beam_samples(&self, n: usize) -> f32 {
+        let tail_val = self.tail.load(Ordering::Acquire);
+        let count = tail_val.min(CAP).min(n);
+        if count == 0 {
+            return 0.0;
+        }
+        let beam_buf = unsafe { &*self.beam_buf.get() };
+        let mut sum = 0u64;
+        for i in 0..count {
+            let idx = (tail_val.wrapping_sub(1 + i)) & CAP_MASK;
+            sum += beam_buf[idx] as u64;
+        }
+        sum as f32 / count as f32
+    }
+
     pub fn latest_beam_samples(&self) -> u32 {
         let tail_val = self.tail.load(Ordering::Acquire);
         if tail_val == 0 {

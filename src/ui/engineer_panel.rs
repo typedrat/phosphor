@@ -195,7 +195,7 @@ pub fn engineer_panel(
             ui.label(format!(
                 "GPU: {} ms  |  Beam samples: {}",
                 fmt_ms(history.avg_total(AVG_WINDOW)),
-                history.latest_beam_samples(),
+                (history.avg_beam_samples(AVG_WINDOW) / 10.0).round() as u32 * 10,
             ));
 
             if let Some(segs) = history.avg_segments(AVG_WINDOW) {
