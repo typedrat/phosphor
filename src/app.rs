@@ -265,6 +265,87 @@ impl InputState {
         samples
     }
 
+    /// Generate a fixed number of samples at the given sample rate.
+    /// Unlike `generate_samples`, this does NOT measure wall-clock time —
+    /// dt is always `1/sample_rate`, making output deterministic.
+    pub fn generate_samples_fixed(
+        &mut self,
+        focus: f32,
+        aspect: f32,
+        accum_resolution: Resolution,
+        sample_rate: f32,
+        count: usize,
+    ) -> Vec<BeamSample> {
+        let spot_radius = focus / accum_resolution.width.max(1) as f32;
+        let beam = BeamState { spot_radius };
+
+        let mut samples = match self.mode {
+            InputMode::Oscilloscope => {
+                self.sync_oscilloscope_params();
+                self.osc_source.sample_rate = sample_rate;
+                if count == 0 {
+                    return Vec::new();
+                }
+                self.osc_source.generate(count, &beam)
+            }
+            InputMode::Audio => {
+                let audio = &mut self.audio;
+                if !audio.playing {
+                    return Vec::new();
+                }
+                let Some(source) = &mut audio.source else {
+                    return Vec::new();
+                };
+                let adj_count = (count as f32 * audio.speed) as usize;
+                if adj_count == 0 {
+                    return Vec::new();
+                }
+                let samples = source.generate(adj_count, &beam);
+                if source.is_finished() {
+                    if audio.looping {
+                        source.seek(0.0);
+                    } else {
+                        audio.playing = false;
+                    }
+                }
+                samples
+            }
+            InputMode::Vector => {
+                if self.vector.segments.is_empty() {
+                    return Vec::new();
+                }
+                let mut src = crate::beam::vector::VectorSource {
+                    segments: self.vector.segments.clone(),
+                    beam_speed: self.vector.beam_speed,
+                    settling_time: self.vector.settling_time,
+                };
+                src.generate(0, &beam)
+            }
+            InputMode::External => Vec::new(),
+        };
+
+        // Aspect ratio correction
+        if aspect > 1.0 {
+            for s in &mut samples {
+                s.x = 0.5 + (s.x - 0.5) / aspect;
+            }
+        } else if aspect < 1.0 {
+            for s in &mut samples {
+                s.y = 0.5 + (s.y - 0.5) * aspect;
+            }
+        }
+
+        // Arc-length resample
+        let mut samples = crate::beam::resample::arc_length_resample(&samples, spot_radius * 0.5);
+
+        // Scale beam energy
+        for s in &mut samples {
+            s.intensity *= BEAM_ENERGY_SCALE;
+        }
+
+        samples
+    }
+
     fn sync_oscilloscope_params(&mut self) {
         let osc = &self.oscilloscope;
         self.osc_source.x_channel.waveform = osc.x_waveform;
