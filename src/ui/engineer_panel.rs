@@ -177,8 +177,12 @@ pub fn engineer_panel(
 
         // -- Resolution --
         ui.heading("Resolution");
-        ui.label("Accum buffer scale");
-        ui.add(egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=4.0).text("x"));
+        ui.label("Internal simulation scale");
+        ui.add(
+            egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=4.0)
+                .step_by(0.25)
+                .text("x"),
+        );
         if let Some(res) = accum_size {
             ui.label(res.to_string());
         }
