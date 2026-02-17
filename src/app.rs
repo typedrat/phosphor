@@ -24,6 +24,7 @@ pub enum InputMode {
     External,
 }
 
+#[derive(Clone)]
 pub struct OscilloscopeState {
     pub x_waveform: Waveform,
     pub x_frequency: f32,

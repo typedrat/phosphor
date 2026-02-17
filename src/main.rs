@@ -4,6 +4,7 @@ mod app;
 mod beam;
 mod gpu;
 mod phosphor;
+mod simulation;
 mod types;
 mod ui;
 
