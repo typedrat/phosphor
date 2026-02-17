@@ -26,7 +26,7 @@ pub struct CompositeParams {
     pub glass_tint: [f32; 3],
     pub edge_falloff: f32,
     pub viewport_size: [f32; 2],
-    _pad: [f32; 2],
+    pub viewport_offset: [f32; 2],
 }
 
 impl CompositeParams {
@@ -39,7 +39,7 @@ impl CompositeParams {
             glass_tint: [0.92, 0.95, 0.92],
             edge_falloff: 0.0,
             viewport_size: [1.0, 1.0],
-            _pad: [0.0; 2],
+            viewport_offset: [0.0; 2],
         }
     }
 

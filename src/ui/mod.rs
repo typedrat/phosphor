@@ -95,6 +95,7 @@ pub struct UiState {
     pub external: ExternalState,
     tab: PanelTab,
     pub panel_visible: bool,
+    pub panel_width: f32,
     pub accum_size: Option<Resolution>,
 }
 
@@ -129,6 +130,7 @@ impl UiState {
             external: ExternalState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
+            panel_width: 0.0,
             accum_size: None,
         }
     }
@@ -147,7 +149,7 @@ impl UiState {
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             if self.panel_visible {
-                egui::SidePanel::left("control_panel")
+                let panel_response = egui::SidePanel::left("control_panel")
                     .default_width(220.0)
                     .show(ctx, |ui| {
                         ui.horizontal(|ui| {
@@ -192,7 +194,9 @@ impl UiState {
                             }
                         }
                     });
+                self.panel_width = panel_response.response.rect.width();
             } else {
+                self.panel_width = 0.0;
                 egui::Area::new(egui::Id::new("panel_toggle"))
                     .fixed_pos(egui::pos2(8.0, 8.0))
                     .show(ctx, |ui| {

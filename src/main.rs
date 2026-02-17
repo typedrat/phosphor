@@ -249,10 +249,6 @@ impl App {
                 gpu.composite_params.glass_tint = eng.glass_tint;
                 gpu.composite_params.curvature = eng.curvature;
                 gpu.composite_params.edge_falloff = eng.edge_falloff;
-                gpu.composite_params.viewport_size = [
-                    gpu.surface_config.width as f32,
-                    gpu.surface_config.height as f32,
-                ];
 
                 // Drain samples from simulation thread's ring buffer.
                 // Cap at 2x frame interval to prevent catastrophic decay during stalls.
@@ -278,15 +274,21 @@ impl App {
                 };
 
                 // Forward UI state changes to the simulation thread
+                let sidebar_width = if self.mode == WindowMode::Combined {
+                    ui.panel_width
+                } else {
+                    0.0
+                };
+                gpu.composite_params.viewport_offset = [sidebar_width, 0.0];
+                gpu.composite_params.viewport_size = [
+                    gpu.surface_config.width as f32 - sidebar_width,
+                    gpu.surface_config.height as f32,
+                ];
+
                 if let Some(tx) = &self.sim_commands {
                     let _ = tx.send(SimCommand::SetInputMode(ui.input_mode));
                     let _ = tx.send(SimCommand::SetOscilloscopeParams(ui.oscilloscope.clone()));
                     let _ = tx.send(SimCommand::SetFocus(ui.focus));
-                    let sidebar_width = if self.mode == WindowMode::Combined && ui.panel_visible {
-                        220.0
-                    } else {
-                        0.0
-                    };
                     let _ = tx.send(SimCommand::SetViewport {
                         width: gpu.surface_config.width as f32 - sidebar_width,
                         height: gpu.surface_config.height as f32,
