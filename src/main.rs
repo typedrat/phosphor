@@ -221,18 +221,22 @@ impl App {
                 // Apply UI state to GPU parameters
                 let eng = &ui.engineer;
 
-                // Beam -- scope focus overrides core sigma, engineer controls the rest
-                gpu.beam_params.sigma_core = ui.focus;
-                gpu.beam_params.sigma_halo = eng.sigma_halo;
+                // Accumulation buffer resolution scale — computed first because
+                // pixel-unit parameters (beam sigma, scatter sigma) must be
+                // scaled to keep their visual size constant.
+                let scale = eng.accum_resolution_scale;
+
+                // Beam -- scope focus overrides core sigma, engineer controls the rest.
+                // Sigma values are in accum-buffer pixels, so scale by buffer scale
+                // to keep the visual beam width constant regardless of resolution.
+                gpu.beam_params.sigma_core = ui.focus * scale;
+                gpu.beam_params.sigma_halo = eng.sigma_halo * scale;
                 gpu.beam_params.halo_fraction = eng.halo_fraction;
 
-                // Faceplate scatter
+                // Faceplate scatter — sigma is in half-res texels, same scaling
                 gpu.faceplate_scatter_params.threshold = eng.scatter_threshold;
-                gpu.faceplate_scatter_params.sigma = eng.scatter_sigma;
+                gpu.faceplate_scatter_params.sigma = eng.scatter_sigma * scale;
                 gpu.faceplate_scatter_params.intensity = eng.scatter_intensity;
-
-                // Accumulation buffer resolution scale
-                let scale = eng.accum_resolution_scale;
                 let target = Resolution::new(
                     ((gpu.surface_config.width as f32) * scale).round().max(1.0) as u32,
                     ((gpu.surface_config.height as f32) * scale)
@@ -310,8 +314,6 @@ impl App {
                         height: gpu.surface_config.height as f32,
                         x_offset: sidebar_width,
                     });
-                    let _ = tx.send(SimCommand::SetAccumResolution(gpu.accum.resolution));
-
                     // Audio controls
                     let _ = tx.send(SimCommand::SetAudioPlaying(ui.audio_ui.playing));
                     let _ = tx.send(SimCommand::SetAudioLooping(ui.audio_ui.looping));

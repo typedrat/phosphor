@@ -9,7 +9,6 @@ use crossbeam_channel::Receiver;
 use crate::app::{InputMode, InputState, OscilloscopeState};
 use crate::beam::SampleProducer;
 use crate::simulation_stats::SimStats;
-use crate::types::Resolution;
 
 /// Target batch interval bounds.
 const MIN_BATCH_INTERVAL: Duration = Duration::from_millis(1);
@@ -27,7 +26,6 @@ pub enum SimCommand {
         height: f32,
         x_offset: f32,
     },
-    SetAccumResolution(Resolution),
     LoadAudioFile(PathBuf),
     SetAudioPlaying(bool),
     SetAudioLooping(bool),
@@ -48,7 +46,6 @@ struct SimState {
     focus: f32,
     viewport_width: f32,
     viewport_height: f32,
-    accum_resolution: Resolution,
     sample_rate: f32,
 }
 
@@ -61,7 +58,6 @@ impl SimState {
             focus: 1.5,
             viewport_width: 800.0,
             viewport_height: 600.0,
-            accum_resolution: Resolution::new(800, 600),
             sample_rate,
         }
     }
@@ -81,7 +77,6 @@ impl SimState {
                 self.viewport_width = width;
                 self.viewport_height = height;
             }
-            SimCommand::SetAccumResolution(res) => self.accum_resolution = res,
             SimCommand::LoadAudioFile(path) => self.input.load_audio_file(path),
             SimCommand::SetAudioPlaying(p) => self.input.audio.playing = p,
             SimCommand::SetAudioLooping(l) => self.input.audio.looping = l,
@@ -143,7 +138,7 @@ pub fn run_simulation(
         let samples = state.input.generate_samples_fixed(
             state.focus,
             state.aspect(),
-            state.accum_resolution,
+            state.viewport_width,
             state.sample_rate,
             batch_size,
         );

@@ -4,7 +4,6 @@ use crate::beam::audio::AudioSource;
 use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource, Waveform};
 use crate::beam::vector::VectorSegment;
 use crate::beam::{BeamSample, BeamSource, BeamState};
-use crate::types::Resolution;
 
 /// Calibration constant for beam energy deposition. The beam_write shader
 /// computes `energy = intensity * profile * dt`, where dt is the per-sample
@@ -172,11 +171,11 @@ impl InputState {
         &mut self,
         focus: f32,
         aspect: f32,
-        accum_resolution: Resolution,
+        viewport_width: f32,
         sample_rate: f32,
         count: usize,
     ) -> Vec<BeamSample> {
-        let spot_radius = focus / accum_resolution.width.max(1) as f32;
+        let spot_radius = focus / viewport_width.max(1.0);
         let beam = BeamState { spot_radius };
 
         let mut samples = match self.mode {
