@@ -100,11 +100,13 @@ Supports combined (single window) and detached (CRT viewport + controls as separ
 
 ```
 src/
-  main.rs              — entry point, window creation, event loop, multi-window
-  app.rs               — InputState, per-mode state (oscilloscope, audio, vector, external)
-  simulation.rs        — simulation thread loop, SimCommand, adaptive batching
+  main.rs              — entry point, tracing init, event loop
+  app.rs               — App struct, ApplicationHandler, WindowMode, shortcut handling
+  controls_window.rs   — ControlsWindow struct, detached controls rendering
+  frame.rs             — per-frame UI→GPU sync, UI→sim dispatch
+  simulation.rs        — SimCommand, InputState, AudioState, VectorState, sim loop
   simulation_stats.rs  — lock-free atomic stats shared between sim and render threads
-  types.rs             — Resolution type
+  types.rs             — Resolution, InputMode, OscilloscopeState, ExternalMode, ExternalState
   phosphor/
     mod.rs             — phosphor database (compile-time baked + runtime loading)
     spectral.rs        — spectral band definitions, CIE integration weights
