@@ -2,10 +2,9 @@ pub mod engineer_panel;
 pub mod scope_panel;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use winit::window::Window;
-
-use std::sync::Arc;
 
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
@@ -13,9 +12,8 @@ use crate::simulation_stats::SimStats;
 use crate::types::Resolution;
 use crate::types::{ExternalState, InputMode, OscilloscopeState};
 
-pub use engineer_panel::SimFrameInfo;
-
 pub use engineer_panel::EngineerState;
+pub use engineer_panel::SimFrameInfo;
 
 #[derive(Default, PartialEq)]
 pub enum PanelTab {
@@ -158,13 +156,14 @@ impl UiState {
         sim_frame: Option<&SimFrameInfo>,
     ) -> EguiRenderOutput {
         let raw_input = self.winit_state.take_egui_input(window);
-        let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
+        let ctx = self.ctx.clone();
+        let fps = 1.0 / ctx.input(|i| i.predicted_dt);
 
-        let full_output = self.ctx.run(raw_input, |ctx| {
+        let full_output = ctx.run(raw_input, |egui_ctx| {
             if self.panel_visible {
                 let panel_response = egui::SidePanel::left("control_panel")
                     .default_width(220.0)
-                    .show(ctx, |ui| {
+                    .show(egui_ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
                             ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
@@ -178,44 +177,14 @@ impl UiState {
                             );
                         });
                         ui.separator();
-
-                        match self.tab {
-                            PanelTab::Scope => {
-                                scope_panel::scope_panel(
-                                    ui,
-                                    &self.phosphors,
-                                    &mut self.phosphor_index,
-                                    &mut self.intensity,
-                                    &mut self.focus,
-                                    &mut self.input_mode,
-                                    &mut self.oscilloscope,
-                                    &mut self.preset_index,
-                                    &mut self.audio_ui,
-                                    &mut self.vector_ui,
-                                    &mut self.external,
-                                );
-                            }
-                            PanelTab::Engineer => {
-                                engineer_panel::engineer_panel(
-                                    ui,
-                                    &mut self.engineer,
-                                    &self.phosphors,
-                                    &mut self.phosphor_index,
-                                    fps,
-                                    timings,
-                                    self.accum_size,
-                                    sim_stats,
-                                    sim_frame,
-                                );
-                            }
-                        }
+                        self.draw_panels(ui, fps, timings, sim_stats, sim_frame);
                     });
                 self.panel_width = panel_response.response.rect.width();
             } else {
                 self.panel_width = 0.0;
                 egui::Area::new(egui::Id::new("panel_toggle"))
                     .fixed_pos(egui::pos2(8.0, 8.0))
-                    .show(ctx, |ui| {
+                    .show(egui_ctx, |ui| {
                         if ui.button("\u{2630}").clicked() {
                             self.panel_visible = true;
                         }
@@ -223,23 +192,16 @@ impl UiState {
             }
         });
 
+        let egui::FullOutput {
+            platform_output,
+            shapes,
+            pixels_per_point,
+            textures_delta,
+            ..
+        } = full_output;
         self.winit_state
-            .handle_platform_output(window, full_output.platform_output);
-
-        let primitives = self
-            .ctx
-            .tessellate(full_output.shapes, full_output.pixels_per_point);
-
-        let size = window.inner_size();
-
-        EguiRenderOutput {
-            primitives,
-            textures_delta: full_output.textures_delta,
-            screen_descriptor: egui_wgpu::ScreenDescriptor {
-                size_in_pixels: [size.width, size.height],
-                pixels_per_point: full_output.pixels_per_point,
-            },
-        }
+            .handle_platform_output(window, platform_output);
+        tessellate_output(&self.ctx, window, shapes, pixels_per_point, textures_delta)
     }
 
     pub fn run_detached(
@@ -251,64 +213,68 @@ impl UiState {
         sim_frame: Option<&SimFrameInfo>,
     ) -> EguiRenderOutput {
         let raw_input = egui_winit.take_egui_input(window);
-        let fps = 1.0 / self.ctx.input(|i| i.predicted_dt);
+        let ctx = self.ctx.clone();
+        let fps = 1.0 / ctx.input(|i| i.predicted_dt);
 
-        let full_output = self.ctx.run(raw_input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let full_output = ctx.run(raw_input, |egui_ctx| {
+            egui::CentralPanel::default().show(egui_ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
                     ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
                 });
                 ui.separator();
-
-                match self.tab {
-                    PanelTab::Scope => {
-                        scope_panel::scope_panel(
-                            ui,
-                            &self.phosphors,
-                            &mut self.phosphor_index,
-                            &mut self.intensity,
-                            &mut self.focus,
-                            &mut self.input_mode,
-                            &mut self.oscilloscope,
-                            &mut self.preset_index,
-                            &mut self.audio_ui,
-                            &mut self.vector_ui,
-                            &mut self.external,
-                        );
-                    }
-                    PanelTab::Engineer => {
-                        engineer_panel::engineer_panel(
-                            ui,
-                            &mut self.engineer,
-                            &self.phosphors,
-                            &mut self.phosphor_index,
-                            fps,
-                            timings,
-                            self.accum_size,
-                            sim_stats,
-                            sim_frame,
-                        );
-                    }
-                }
+                self.draw_panels(ui, fps, timings, sim_stats, sim_frame);
             });
         });
 
-        egui_winit.handle_platform_output(window, full_output.platform_output);
+        let egui::FullOutput {
+            platform_output,
+            shapes,
+            pixels_per_point,
+            textures_delta,
+            ..
+        } = full_output;
+        egui_winit.handle_platform_output(window, platform_output);
+        tessellate_output(&self.ctx, window, shapes, pixels_per_point, textures_delta)
+    }
 
-        let primitives = self
-            .ctx
-            .tessellate(full_output.shapes, full_output.pixels_per_point);
-
-        let size = window.inner_size();
-
-        EguiRenderOutput {
-            primitives,
-            textures_delta: full_output.textures_delta,
-            screen_descriptor: egui_wgpu::ScreenDescriptor {
-                size_in_pixels: [size.width, size.height],
-                pixels_per_point: full_output.pixels_per_point,
-            },
+    fn draw_panels(
+        &mut self,
+        ui: &mut egui::Ui,
+        fps: f32,
+        timings: Option<&TimingHistory>,
+        sim_stats: Option<&Arc<SimStats>>,
+        sim_frame: Option<&SimFrameInfo>,
+    ) {
+        match self.tab {
+            PanelTab::Scope => {
+                scope_panel::scope_panel(
+                    ui,
+                    &self.phosphors,
+                    &mut self.phosphor_index,
+                    &mut self.intensity,
+                    &mut self.focus,
+                    &mut self.input_mode,
+                    &mut self.oscilloscope,
+                    &mut self.preset_index,
+                    &mut self.audio_ui,
+                    &mut self.vector_ui,
+                    &mut self.external,
+                );
+            }
+            PanelTab::Engineer => {
+                engineer_panel::engineer_panel(
+                    ui,
+                    &mut self.engineer,
+                    &self.phosphors,
+                    &mut self.phosphor_index,
+                    fps,
+                    timings,
+                    self.accum_size,
+                    sim_stats,
+                    sim_frame,
+                );
+            }
         }
     }
 
@@ -324,5 +290,24 @@ impl UiState {
         } else {
             false
         }
+    }
+}
+
+fn tessellate_output(
+    ctx: &egui::Context,
+    window: &Window,
+    shapes: Vec<egui::epaint::ClippedShape>,
+    pixels_per_point: f32,
+    textures_delta: egui::TexturesDelta,
+) -> EguiRenderOutput {
+    let primitives = ctx.tessellate(shapes, pixels_per_point);
+    let size = window.inner_size();
+    EguiRenderOutput {
+        primitives,
+        textures_delta,
+        screen_descriptor: egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [size.width, size.height],
+            pixels_per_point,
+        },
     }
 }
