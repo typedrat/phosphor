@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod beam;
+mod controls_window;
 mod gpu;
 mod phosphor;
 mod presets;
@@ -18,6 +19,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use beam::SampleConsumer;
+use controls_window::ControlsWindow;
 use gpu::GpuState;
 use simulation::SimCommand;
 use simulation_stats::SimStats;
@@ -29,88 +31,6 @@ enum WindowMode {
     Combined,
     #[default]
     Detached,
-}
-
-struct ControlsWindow {
-    egui_renderer: egui_wgpu::Renderer,
-    egui_winit: egui_winit::State,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    window: Arc<Window>,
-}
-
-impl ControlsWindow {
-    fn new(event_loop: &ActiveEventLoop, gpu: &GpuState, egui_ctx: egui::Context) -> Option<Self> {
-        let attrs = Window::default_attributes()
-            .with_title("Phosphor \u{2014} Controls")
-            .with_inner_size(winit::dpi::LogicalSize::new(320.0, 600.0));
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                tracing::error!("Failed to create controls window: {e}");
-                return None;
-            }
-        };
-
-        let surface = gpu.instance.create_surface(window.clone()).ok()?;
-        let size = window.inner_size();
-
-        let surface_caps = surface.get_capabilities(&gpu.adapter);
-        let format = surface_caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(surface_caps.formats[0]);
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&gpu.device, &surface_config);
-
-        let mut egui_renderer = egui_wgpu::Renderer::new(&gpu.device, format, Default::default());
-
-        // The shared egui::Context already has a font atlas loaded (uploaded to
-        // the viewport's renderer). This new renderer needs its own copy.
-        // Font atlas is always TextureId::Managed(0).
-        let font_delta = egui_ctx.fonts(|fonts| {
-            egui::epaint::ImageDelta::full(
-                egui::epaint::ImageData::Color(std::sync::Arc::new(fonts.image())),
-                egui::TextureOptions::LINEAR,
-            )
-        });
-        egui_renderer.update_texture(
-            &gpu.device,
-            &gpu.queue,
-            egui::TextureId::Managed(0),
-            &font_delta,
-        );
-
-        let egui_winit = egui_winit::State::new(
-            egui_ctx,
-            egui::ViewportId::from_hash_of("controls"),
-            &window,
-            Some(window.scale_factor() as f32),
-            window.theme(),
-            None,
-        );
-
-        Some(Self {
-            window,
-            surface,
-            surface_config,
-            egui_renderer,
-            egui_winit,
-        })
-    }
 }
 
 /// Fallback frame interval when the monitor refresh rate can't be queried.
@@ -395,110 +315,28 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.render_controls_window(event_loop);
+                let (controls, gpu, ui) = match (&mut self.controls, &self.gpu, &mut self.ui) {
+                    (Some(c), Some(g), Some(u)) => (c, g, u),
+                    _ => return,
+                };
+                match controls.render(gpu, ui, self.sim_stats.as_ref()) {
+                    Ok(()) => {}
+                    Err(wgpu::SurfaceError::Lost) => {
+                        controls
+                            .surface
+                            .configure(&gpu.device, &controls.surface_config);
+                    }
+                    Err(wgpu::SurfaceError::OutOfMemory) => {
+                        tracing::error!("GPU out of memory (controls window)");
+                        event_loop.exit();
+                    }
+                    Err(e) => {
+                        tracing::warn!("Controls surface error: {e:?}");
+                    }
+                }
             }
             _ => {}
         }
-    }
-
-    fn render_controls_window(&mut self, event_loop: &ActiveEventLoop) {
-        let (controls, gpu, ui) = match (&mut self.controls, &self.gpu, &mut self.ui) {
-            (Some(c), Some(g), Some(u)) => (c, g, u),
-            _ => return,
-        };
-
-        // Get surface texture
-        let output = match controls.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(wgpu::SurfaceError::Lost) => {
-                controls
-                    .surface
-                    .configure(&gpu.device, &controls.surface_config);
-                return;
-            }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                tracing::error!("GPU out of memory (controls window)");
-                event_loop.exit();
-                return;
-            }
-            Err(e) => {
-                tracing::warn!("Controls surface error: {e:?}");
-                return;
-            }
-        };
-
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Run egui in detached mode
-        let timings = gpu.profiler.as_ref().map(|p| &p.history);
-        let egui_output = ui.run_detached(
-            &controls.window,
-            &mut controls.egui_winit,
-            timings,
-            self.sim_stats.as_ref(),
-            None, // sim_frame only available during viewport redraw
-        );
-
-        // Update egui textures
-        for (id, delta) in &egui_output.textures_delta.set {
-            controls
-                .egui_renderer
-                .update_texture(&gpu.device, &gpu.queue, *id, delta);
-        }
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("controls_frame"),
-            });
-
-        controls.egui_renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &egui_output.primitives,
-            &egui_output.screen_descriptor,
-        );
-
-        // Clear + render egui
-        {
-            let mut rpass = encoder
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("controls_egui"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.1,
-                                g: 0.1,
-                                b: 0.1,
-                                a: 1.0,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    ..Default::default()
-                })
-                .forget_lifetime();
-
-            controls.egui_renderer.render(
-                &mut rpass,
-                &egui_output.primitives,
-                &egui_output.screen_descriptor,
-            );
-        }
-
-        for id in &egui_output.textures_delta.free {
-            controls.egui_renderer.free_texture(id);
-        }
-
-        gpu.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
     }
 }
 
