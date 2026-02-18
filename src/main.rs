@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-mod app;
 mod beam;
 mod gpu;
 mod phosphor;
