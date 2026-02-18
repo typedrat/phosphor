@@ -27,8 +27,15 @@
       libxrandr
     ];
 
+    src = pkgs.lib.cleanSourceWith {
+      src = inputs.self;
+      filter = path: type:
+        (craneLib.filterCargoSources path type)
+        || (builtins.match ".*\\.(wgsl|csv|toml)$" path != null);
+    };
+
     commonArgs = {
-      src = craneLib.cleanCargoSource inputs.self;
+      inherit src;
       strictDeps = true;
 
       buildInputs = runtimeLibs;
