@@ -1,5 +1,5 @@
-use crate::app::OscilloscopeState;
 use crate::beam::oscilloscope::Waveform;
+use crate::types::OscilloscopeState;
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 

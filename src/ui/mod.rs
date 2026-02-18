@@ -7,11 +7,11 @@ use winit::window::Window;
 
 use std::sync::Arc;
 
-use crate::app::{ExternalState, InputMode, OscilloscopeState};
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
 use crate::simulation_stats::SimStats;
 use crate::types::Resolution;
+use crate::types::{ExternalState, InputMode, OscilloscopeState};
 
 pub use engineer_panel::SimFrameInfo;
 

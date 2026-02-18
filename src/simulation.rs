@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 
-use crate::app::{InputMode, InputState, OscilloscopeState};
+use crate::app::InputState;
 use crate::beam::SampleProducer;
 use crate::simulation_stats::SimStats;
+use crate::types::{InputMode, OscilloscopeState};
 
 /// Target batch interval bounds.
 const MIN_BATCH_INTERVAL: Duration = Duration::from_millis(1);

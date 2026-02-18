@@ -1,8 +1,8 @@
 use strum::IntoEnumIterator;
 
-use crate::app::{ExternalMode, ExternalState, InputMode, OscilloscopeState};
 use crate::phosphor::PhosphorType;
 use crate::presets::OSCILLOSCOPE_PRESETS;
+use crate::types::{ExternalMode, ExternalState, InputMode, OscilloscopeState};
 
 use super::{AudioUiState, VectorUiState};
 

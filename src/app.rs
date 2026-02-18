@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use crate::beam::audio::AudioSource;
-use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource, Waveform};
+use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource};
 use crate::beam::vector::VectorSegment;
 use crate::beam::{BeamSample, BeamSource, BeamState};
+use crate::types::{ExternalState, InputMode, OscilloscopeState};
 
 /// Calibration constant for beam energy deposition. The beam_write shader
 /// computes `energy = intensity * profile * dt`, where dt is the per-sample
@@ -12,36 +13,6 @@ use crate::beam::{BeamSample, BeamSource, BeamState};
 /// tonemapping. This constant represents the beam current / power scale
 /// that makes the phosphor visibly glow at the default settings.
 const BEAM_ENERGY_SCALE: f32 = 5000.0;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum InputMode {
-    #[default]
-    Oscilloscope,
-    Audio,
-    Vector,
-    External,
-}
-
-#[derive(Clone, PartialEq)]
-pub struct OscilloscopeState {
-    pub x_waveform: Waveform,
-    pub x_frequency: f32,
-    pub x_amplitude: f32,
-    pub x_phase: f32,
-    pub x_dc_offset: f32,
-    pub y_waveform: Waveform,
-    pub y_frequency: f32,
-    pub y_amplitude: f32,
-    pub y_phase: f32,
-    pub y_dc_offset: f32,
-    pub sample_rate: f32,
-}
-
-impl Default for OscilloscopeState {
-    fn default() -> Self {
-        crate::presets::OSCILLOSCOPE_PRESETS[0].state.clone()
-    }
-}
 
 pub struct AudioState {
     pub file_path: Option<PathBuf>,
@@ -83,29 +54,6 @@ impl Default for VectorState {
             settling_time: 0.001,
             looping: true,
             load_error: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ExternalMode {
-    #[default]
-    Stdin,
-    Socket,
-}
-
-pub struct ExternalState {
-    pub mode: ExternalMode,
-    pub socket_path: String,
-    pub connected: bool,
-}
-
-impl Default for ExternalState {
-    fn default() -> Self {
-        Self {
-            mode: ExternalMode::Stdin,
-            socket_path: String::new(),
-            connected: false,
         }
     }
 }
