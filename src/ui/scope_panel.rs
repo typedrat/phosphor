@@ -2,6 +2,7 @@ use strum::IntoEnumIterator;
 
 use crate::app::{ExternalMode, ExternalState, InputMode, OscilloscopeState};
 use crate::phosphor::PhosphorType;
+use crate::presets::OSCILLOSCOPE_PRESETS;
 
 use super::{AudioUiState, VectorUiState};
 
@@ -14,6 +15,7 @@ pub fn scope_panel(
     focus: &mut f32,
     input_mode: &mut InputMode,
     oscilloscope: &mut OscilloscopeState,
+    preset_index: &mut Option<usize>,
     audio_ui: &mut AudioUiState,
     vector_ui: &mut VectorUiState,
     external: &mut ExternalState,
@@ -54,14 +56,41 @@ pub fn scope_panel(
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| match input_mode {
-        InputMode::Oscilloscope => oscilloscope_controls(ui, oscilloscope),
+        InputMode::Oscilloscope => oscilloscope_controls(ui, oscilloscope, preset_index),
         InputMode::Audio => audio_controls(ui, audio_ui),
         InputMode::Vector => vector_controls(ui, vector_ui),
         InputMode::External => external_controls(ui, external),
     });
 }
 
-fn oscilloscope_controls(ui: &mut egui::Ui, osc: &mut OscilloscopeState) {
+fn oscilloscope_controls(
+    ui: &mut egui::Ui,
+    osc: &mut OscilloscopeState,
+    preset_index: &mut Option<usize>,
+) {
+    let selected_text = match *preset_index {
+        Some(i) => {
+            let p = &OSCILLOSCOPE_PRESETS[i];
+            format!("{} — {}", p.name, p.description)
+        }
+        None => "(Custom)".to_string(),
+    };
+    egui::ComboBox::from_id_salt("osc_preset")
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            for (i, p) in OSCILLOSCOPE_PRESETS.iter().enumerate() {
+                let label = format!("{} — {}", p.name, p.description);
+                if ui.selectable_value(preset_index, Some(i), label).clicked() {
+                    *osc = p.state.clone();
+                }
+            }
+        });
+
+    ui.separator();
+
+    // Track the state before rendering controls to detect manual changes
+    let osc_before = osc.clone();
+
     ui.label("X Channel");
     ui.indent("x_ch", |ui| {
         egui::ComboBox::from_id_salt("x_waveform")
@@ -109,6 +138,11 @@ fn oscilloscope_controls(ui: &mut egui::Ui, osc: &mut OscilloscopeState) {
             .logarithmic(true)
             .text("Sample Rate"),
     );
+
+    // Clear preset selection if user manually changed any parameter
+    if *osc != osc_before {
+        *preset_index = None;
+    }
 }
 
 fn audio_controls(ui: &mut egui::Ui, audio: &mut AudioUiState) {

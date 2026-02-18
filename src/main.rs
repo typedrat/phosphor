@@ -4,6 +4,7 @@ mod app;
 mod beam;
 mod gpu;
 mod phosphor;
+mod presets;
 mod simulation;
 mod simulation_stats;
 mod types;

@@ -22,7 +22,7 @@ pub enum InputMode {
     External,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct OscilloscopeState {
     pub x_waveform: Waveform,
     pub x_frequency: f32,
@@ -39,19 +39,7 @@ pub struct OscilloscopeState {
 
 impl Default for OscilloscopeState {
     fn default() -> Self {
-        Self {
-            x_waveform: Waveform::Sine,
-            x_frequency: 100.0,
-            x_amplitude: 0.4,
-            x_phase: 0.0,
-            x_dc_offset: 0.0,
-            y_waveform: Waveform::Sine,
-            y_frequency: 100.0,
-            y_amplitude: 0.4,
-            y_phase: std::f32::consts::FRAC_PI_2,
-            y_dc_offset: 0.0,
-            sample_rate: 44100.0,
-        }
+        crate::presets::OSCILLOSCOPE_PRESETS[0].state.clone()
     }
 }
 
