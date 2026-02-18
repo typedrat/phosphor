@@ -27,8 +27,8 @@ use ui::{SimFrameInfo, UiState};
 
 #[derive(Default, PartialEq)]
 enum WindowMode {
-    #[default]
     Combined,
+    #[default]
     Detached,
 }
 
@@ -548,6 +548,13 @@ impl ApplicationHandler for App {
             height: size.height as f32,
             x_offset: 0.0,
         });
+
+        // If starting in detached mode, create the controls window immediately
+        if self.mode == WindowMode::Detached
+            && let Some(controls) = ControlsWindow::new(event_loop, &gpu, ui.ctx.clone())
+        {
+            self.controls = Some(controls);
+        }
 
         self.sim_consumer = Some(consumer);
         self.sim_commands = Some(cmd_tx);
