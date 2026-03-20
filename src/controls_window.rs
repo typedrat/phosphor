@@ -56,23 +56,10 @@ impl ControlsWindow {
         };
         surface.configure(&gpu.device, &surface_config);
 
-        let mut egui_renderer = egui_wgpu::Renderer::new(&gpu.device, format, Default::default());
+        let egui_renderer = egui_wgpu::Renderer::new(&gpu.device, format, Default::default());
 
-        // The shared egui::Context already has a font atlas loaded (uploaded to
-        // the viewport's renderer). This new renderer needs its own copy.
-        // Font atlas is always TextureId::Managed(0).
-        let font_delta = egui_ctx.fonts(|fonts| {
-            egui::epaint::ImageDelta::full(
-                egui::epaint::ImageData::Color(std::sync::Arc::new(fonts.image())),
-                egui::TextureOptions::LINEAR,
-            )
-        });
-        egui_renderer.update_texture(
-            &gpu.device,
-            &gpu.queue,
-            egui::TextureId::Managed(0),
-            &font_delta,
-        );
+        // Font atlas texture will be uploaded on the first render via
+        // textures_delta.set from Context::run().
 
         let egui_winit = egui_winit::State::new(
             egui_ctx,
