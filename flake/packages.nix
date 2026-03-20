@@ -38,7 +38,7 @@
       inherit src;
       strictDeps = true;
 
-      buildInputs = runtimeLibs;
+      buildInputs = runtimeLibs ++ (with pkgs; [alsa-lib]);
       nativeBuildInputs = with pkgs; [pkg-config];
     };
 

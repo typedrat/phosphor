@@ -36,6 +36,13 @@ symphonia = { version = "0.5", default-features = false, features = [
     "opt-simd"
 ] }
 
+# Audio output
+cpal = "0.15"
+
+# Audio DSP (resampling, signal utilities)
+dasp_signal = "0.11"
+dasp_interpolate = { version = "0.11", features = ["linear"] }
+
 # Math
 glam = { version = "0.32", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
