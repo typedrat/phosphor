@@ -13,6 +13,12 @@ use crate::beam::{BeamSample, BeamSource, BeamState, SampleProducer};
 use crate::simulation_stats::SimStats;
 use crate::types::{ExternalState, InputMode, OscilloscopeState};
 
+struct BatchModeState {
+    samples_per_frame: usize,
+    frame_request_rx: crossbeam_channel::Receiver<()>,
+    frame_response_tx: crossbeam_channel::Sender<Vec<BeamSample>>,
+}
+
 /// Calibration constant for beam energy deposition. The beam_write shader
 /// computes `energy = intensity * profile * dt`, where dt is the per-sample
 /// dwell time (~1/44100 s). Without scaling, the deposited energy is on the
@@ -25,6 +31,7 @@ const BEAM_ENERGY_SCALE: f32 = 5000.0;
 pub struct AudioState {
     pub shared: Option<Arc<SharedAudioPlayback>>,
     pub last_audio_pos: usize,
+    pub recording_audio_pos: usize,
 }
 
 pub struct VectorState {
@@ -197,6 +204,75 @@ impl InputState {
         samples
     }
 
+    /// Generate a fixed number of audio samples for recording mode.
+    /// Unlike `generate_samples_fixed` for Audio mode, this reads sequentially
+    /// through the decoded audio buffer rather than following the cpal playback
+    /// position (which doesn't advance during recording).
+    pub fn generate_audio_samples_recording(
+        &mut self,
+        focus: f32,
+        aspect: f32,
+        viewport_width: f32,
+        count: usize,
+    ) -> Vec<BeamSample> {
+        let spot_radius = focus / viewport_width.max(1.0);
+
+        let audio = &mut self.audio;
+        let Some(shared) = &audio.shared else {
+            return Vec::new();
+        };
+
+        let channels = shared.channels as usize;
+        let dt = 1.0 / shared.sample_rate as f32;
+        let start_pos = audio.recording_audio_pos;
+        let samples_data = &shared.samples;
+        let total_frames = samples_data.len() / channels;
+        let end_pos = (start_pos + count).min(total_frames);
+
+        let mut result = Vec::with_capacity(end_pos - start_pos);
+        for frame in start_pos..end_pos {
+            let idx = frame * channels;
+            if idx + 1 >= samples_data.len() {
+                break;
+            }
+            let l = samples_data[idx];
+            let r = samples_data[idx + 1];
+            result.push(BeamSample {
+                x: (l + 1.0) / 2.0,
+                y: (r + 1.0) / 2.0,
+                intensity: 1.0,
+                dt,
+            });
+        }
+
+        audio.recording_audio_pos = end_pos;
+
+        // Aspect ratio correction
+        if aspect > 1.0 {
+            for s in &mut result {
+                s.x = 0.5 + (s.x - 0.5) / aspect;
+            }
+        } else if aspect < 1.0 {
+            for s in &mut result {
+                s.y = 0.5 + (s.y - 0.5) * aspect;
+            }
+        }
+
+        // Arc-length resample
+        let mut result = crate::beam::resample::arc_length_resample(&result, spot_radius * 0.5);
+
+        // Scale beam energy
+        for s in &mut result {
+            s.intensity *= BEAM_ENERGY_SCALE;
+        }
+
+        result
+    }
+
+    pub fn rewind_recording_audio(&mut self) {
+        self.audio.recording_audio_pos = 0;
+    }
+
     fn sync_oscilloscope_params(&mut self) {
         let osc = &self.oscilloscope;
         self.osc_source.x_channel.waveform = osc.x_waveform;
@@ -257,6 +333,18 @@ pub enum SimCommand {
         rate: f32,
         producer: SampleProducer,
     },
+    /// Enter batch-on-demand mode for recording. The sim thread will wait for
+    /// requests on `frame_request_rx` and respond with exactly `samples_per_frame`
+    /// samples via `frame_response_tx`.
+    StartBatchMode {
+        samples_per_frame: usize,
+        frame_request_rx: crossbeam_channel::Receiver<()>,
+        frame_response_tx: crossbeam_channel::Sender<Vec<BeamSample>>,
+    },
+    /// Exit batch mode and resume normal real-time sample generation.
+    StopBatchMode,
+    /// Reset the recording audio position to the beginning of the audio buffer.
+    RewindRecordingAudio,
     Shutdown,
 }
 
@@ -305,7 +393,10 @@ impl SimState {
             }
             SimCommand::LoadVectorFile(path) => self.input.load_vector_file(path),
             SimCommand::SetSampleRate { rate, .. } => self.sample_rate = rate,
-            SimCommand::Shutdown => {} // handled by caller
+            SimCommand::Shutdown => {}              // handled by caller
+            SimCommand::StartBatchMode { .. } => {} // handled by run_simulation
+            SimCommand::StopBatchMode => {}         // handled by run_simulation
+            SimCommand::RewindRecordingAudio => {}  // handled by run_simulation
         }
     }
 }
@@ -330,6 +421,9 @@ pub fn run_simulation(
     let mut generated_this_second: usize = 0;
     let mut second_timer = Instant::now();
 
+    // Batch-on-demand mode state (used for recording)
+    let mut batch_mode: Option<BatchModeState> = None;
+
     loop {
         // Process all pending commands
         while let Ok(cmd) = commands.try_recv() {
@@ -349,7 +443,73 @@ pub fn run_simulation(
                 tracing::info!(sample_rate = rate, "sample rate changed");
                 continue;
             }
-            state.apply_command(cmd);
+            match cmd {
+                SimCommand::StartBatchMode {
+                    samples_per_frame,
+                    frame_request_rx,
+                    frame_response_tx,
+                } => {
+                    tracing::info!(samples_per_frame, "entering batch mode");
+                    batch_mode = Some(BatchModeState {
+                        samples_per_frame,
+                        frame_request_rx,
+                        frame_response_tx,
+                    });
+                    continue;
+                }
+                SimCommand::StopBatchMode => {
+                    tracing::info!("exiting batch mode");
+                    batch_mode = None;
+                    next_tick = Instant::now();
+                    continue;
+                }
+                SimCommand::RewindRecordingAudio => {
+                    state.input.rewind_recording_audio();
+                    continue;
+                }
+                cmd => {
+                    state.apply_command(cmd);
+                }
+            }
+        }
+
+        // Batch-on-demand mode: wait for a frame request and respond with samples
+        if let Some(ref bm) = batch_mode {
+            // Block until the recorder requests a frame (or the channel closes)
+            if let Err(_) = bm.frame_request_rx.recv() {
+                // Requester disconnected — exit batch mode
+                tracing::info!("batch mode request channel closed, exiting batch mode");
+                batch_mode = None;
+                next_tick = Instant::now();
+                continue;
+            }
+
+            // Re-borrow after recv (bm borrow ended)
+            let (samples_per_frame, response_tx) = {
+                let bm = batch_mode.as_ref().unwrap();
+                (bm.samples_per_frame, bm.frame_response_tx.clone())
+            };
+
+            let samples = if state.input.mode == InputMode::Audio {
+                state.input.generate_audio_samples_recording(
+                    state.focus,
+                    state.aspect(),
+                    state.viewport_width,
+                    samples_per_frame,
+                )
+            } else {
+                state.input.generate_samples_fixed(
+                    state.focus,
+                    state.aspect(),
+                    state.viewport_width,
+                    state.sample_rate,
+                    samples_per_frame,
+                )
+            };
+
+            // Send the samples back; ignore send error (recorder may have stopped)
+            let _ = response_tx.send(samples);
+            continue;
         }
 
         // Compute batch size from current sample rate and batch interval
