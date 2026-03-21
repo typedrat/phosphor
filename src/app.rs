@@ -27,7 +27,10 @@ enum GlobalAction {
     ToggleFullscreen,
 }
 
-fn check_global_shortcut(event: &WindowEvent, ctx: &egui::Context) -> Option<GlobalAction> {
+fn check_global_shortcut(
+    event: &WindowEvent,
+    modifiers: &winit::keyboard::ModifiersState,
+) -> Option<GlobalAction> {
     let WindowEvent::KeyboardInput {
         event:
             winit::event::KeyEvent {
@@ -41,7 +44,7 @@ fn check_global_shortcut(event: &WindowEvent, ctx: &egui::Context) -> Option<Glo
         return None;
     };
 
-    let has_modifier = ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
+    let has_modifier = modifiers.control_key() || modifiers.super_key();
     if !has_modifier {
         return None;
     }
@@ -74,6 +77,7 @@ pub struct App {
     sim_stats: Option<Arc<SimStats>>,
     sample_rate: f32,
     audio_output: Option<AudioOutput>,
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl Default for App {
@@ -92,6 +96,7 @@ impl Default for App {
             sim_stats: None,
             sample_rate: 44100.0,
             audio_output: None,
+            modifiers: winit::keyboard::ModifiersState::empty(),
         }
     }
 }
@@ -478,9 +483,12 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if let Some(ui) = &self.ui
-            && let Some(action) = check_global_shortcut(&event, &ui.ctx)
-        {
+        // Track modifier keys from any window
+        if let WindowEvent::ModifiersChanged(mods) = &event {
+            self.modifiers = mods.state();
+        }
+
+        if let Some(action) = check_global_shortcut(&event, &self.modifiers) {
             match action {
                 GlobalAction::Quit => event_loop.exit(),
                 GlobalAction::ToggleDetach => self.toggle_detach(event_loop),
