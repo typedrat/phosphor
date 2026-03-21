@@ -1,5 +1,6 @@
 pub mod engineer_panel;
 pub mod media_overlay;
+pub mod recording_panel;
 pub mod scope_panel;
 
 use std::path::PathBuf;
@@ -16,12 +17,14 @@ use crate::types::{ExternalState, InputMode, OscilloscopeState};
 
 pub use engineer_panel::EngineerState;
 pub use engineer_panel::SimFrameInfo;
+pub use recording_panel::RecordingUiState;
 
 #[derive(Default, PartialEq)]
 pub enum PanelTab {
     #[default]
     Scope,
     Engineer,
+    Recording,
 }
 
 pub struct EguiRenderOutput {
@@ -84,6 +87,7 @@ pub struct UiState {
     pub vector_ui: VectorUiState,
     pub external: ExternalState,
     pub preset_index: Option<usize>,
+    pub recording: RecordingUiState,
     tab: PanelTab,
     pub panel_visible: bool,
     pub panel_width: f32,
@@ -121,6 +125,7 @@ impl UiState {
             vector_ui: VectorUiState::default(),
             external: ExternalState::default(),
             preset_index: Some(0),
+            recording: RecordingUiState::default(),
             tab: PanelTab::default(),
             panel_visible: true,
             panel_width: 0.0,
@@ -156,6 +161,7 @@ impl UiState {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
                             ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
+                            ui.selectable_value(&mut self.tab, PanelTab::Recording, "Recording");
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -210,6 +216,7 @@ impl UiState {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, PanelTab::Scope, "Scope");
                     ui.selectable_value(&mut self.tab, PanelTab::Engineer, "Engineer");
+                    ui.selectable_value(&mut self.tab, PanelTab::Recording, "Recording");
                 });
                 ui.separator();
                 self.draw_panels(ui, fps, timings, sim_stats, sim_frame);
@@ -263,6 +270,9 @@ impl UiState {
                     sim_stats,
                     sim_frame,
                 );
+            }
+            PanelTab::Recording => {
+                recording_panel::recording_panel(ui, &mut self.recording, self.input_mode);
             }
         }
     }
