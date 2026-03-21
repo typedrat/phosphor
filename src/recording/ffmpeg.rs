@@ -125,6 +125,10 @@ pub enum EncodingPreset {
     Av1Hdr10,
     /// Apple ProRes 4444 — lossless-quality, large files
     ProRes4444,
+    /// H.265 via NVENC with HDR10 — fast GPU encoding (NVIDIA only)
+    H265NvencHdr10,
+    /// AV1 via NVENC with HDR10 — fast GPU encoding (NVIDIA 50-series+)
+    Av1NvencHdr10,
 }
 
 impl EncodingPreset {
@@ -133,6 +137,8 @@ impl EncodingPreset {
         Self::H265Sdr,
         Self::Av1Hdr10,
         Self::ProRes4444,
+        Self::H265NvencHdr10,
+        Self::Av1NvencHdr10,
     ];
 
     /// Short identifier used in CLI flags and file-name hints.
@@ -142,6 +148,8 @@ impl EncodingPreset {
             Self::H265Sdr => "h265-sdr",
             Self::Av1Hdr10 => "av1-hdr10",
             Self::ProRes4444 => "prores-4444",
+            Self::H265NvencHdr10 => "h265-nvenc-hdr10",
+            Self::Av1NvencHdr10 => "av1-nvenc-hdr10",
         }
     }
 
@@ -152,14 +160,16 @@ impl EncodingPreset {
             Self::H265Sdr => "H.265 SDR (HEVC, tonemapped BT.709)",
             Self::Av1Hdr10 => "AV1 HDR10 (SVT-AV1, BT.2020 PQ)",
             Self::ProRes4444 => "ProRes 4444 (lossless-quality, large)",
+            Self::H265NvencHdr10 => "H.265 HDR10 NVENC (GPU, fast)",
+            Self::Av1NvencHdr10 => "AV1 HDR10 NVENC (GPU, fast)",
         }
     }
 
     /// Default file extension (without leading dot).
     pub fn extension(&self) -> &'static str {
         match self {
-            Self::H265Hdr10 | Self::H265Sdr => "mp4",
-            Self::Av1Hdr10 => "mkv",
+            Self::H265Hdr10 | Self::H265Sdr | Self::H265NvencHdr10 => "mp4",
+            Self::Av1Hdr10 | Self::Av1NvencHdr10 => "mkv",
             Self::ProRes4444 => "mov",
         }
     }
@@ -242,6 +252,48 @@ impl EncodingPreset {
                 "-bits_per_mb",
                 "8000",
             ],
+            Self::H265NvencHdr10 => vec![
+                "-c:v",
+                "hevc_nvenc",
+                "-pix_fmt",
+                "p010le",
+                "-colorspace",
+                "bt2020nc",
+                "-color_primaries",
+                "bt2020",
+                "-color_trc",
+                "smpte2084",
+                "-rc",
+                "constqp",
+                "-qp",
+                "18",
+                "-preset",
+                "p7",
+                "-tier",
+                "high",
+                "-profile:v",
+                "main10",
+            ],
+            Self::Av1NvencHdr10 => vec![
+                "-c:v",
+                "av1_nvenc",
+                "-pix_fmt",
+                "p010le",
+                "-colorspace",
+                "bt2020nc",
+                "-color_primaries",
+                "bt2020",
+                "-color_trc",
+                "smpte2084",
+                "-rc",
+                "constqp",
+                "-qp",
+                "18",
+                "-preset",
+                "p7",
+                "-highbitdepth",
+                "1",
+            ],
         }
     }
 
@@ -255,7 +307,7 @@ impl EncodingPreset {
 // ffmpeg availability check
 // ---------------------------------------------------------------------------
 
-/// Verify that `ffmpeg` is on `PATH` and supports the `rgbaf16le` pixel format.
+/// Verify that `ffmpeg` is on `PATH` and supports the `rgbf16le` pixel format.
 ///
 /// Returns `Ok(())` on success, or an error string describing what is missing.
 pub fn check_ffmpeg() -> Result<(), String> {
@@ -271,7 +323,7 @@ pub fn check_ffmpeg() -> Result<(), String> {
         return Err("ffmpeg -version exited with non-zero status".to_string());
     }
 
-    // Check that rgbaf16le is a supported pixel format.
+    // Check that rgbf16le is a supported pixel format.
     let pix_output = Command::new("ffmpeg")
         .args(["-pix_fmts"])
         .stdout(Stdio::piped())
@@ -280,13 +332,13 @@ pub fn check_ffmpeg() -> Result<(), String> {
         .map_err(|e| format!("failed to query ffmpeg pixel formats: {e}"))?;
 
     let pix_list = String::from_utf8_lossy(&pix_output.stdout);
-    if !pix_list.contains("rgbaf16le") {
-        return Err("ffmpeg build does not support rgbaf16le pixel format — \
+    if !pix_list.contains("rgbf16le") {
+        return Err("ffmpeg build does not support rgbf16le pixel format — \
              a recent build with full codec support is required"
             .to_string());
     }
 
-    info!("ffmpeg found and supports rgbaf16le");
+    info!("ffmpeg found and supports rgbf16le");
     Ok(())
 }
 
@@ -317,22 +369,32 @@ pub struct FfmpegConfig {
 // FfmpegPipe
 // ---------------------------------------------------------------------------
 
+/// Bytes per pixel in the GPU staging buffer (Rgba16Float = 4 × f16).
+const GPU_BYTES_PER_PIXEL: u32 = 8;
+/// Bytes per pixel piped to ffmpeg (RGB f16, alpha stripped = 3 × f16).
+const PIPE_BYTES_PER_PIXEL: u32 = 6;
+
 /// Row stride in bytes for a single `Rgba16Float` (8 bytes per pixel) row
 /// padded to wgpu's copy-row-alignment requirement.
 fn padded_row_bytes(width: u32) -> u32 {
-    let unpadded = width * 8; // 4 channels × 2 bytes each
+    let unpadded = width * GPU_BYTES_PER_PIXEL;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     unpadded.div_ceil(align) * align
 }
 
-/// Active ffmpeg child process receiving raw `Rgba16Float` frames on stdin.
+/// Active ffmpeg child process receiving raw frames on stdin.
+///
+/// The GPU produces `Rgba16Float` (8 bytes/pixel) but we strip the alpha
+/// channel and pipe `rgbf16le` (6 bytes/pixel) to ffmpeg, saving 25% bandwidth.
 pub struct FfmpegPipe {
     child: Child,
     stdin: Option<ChildStdin>,
-    /// Unpadded bytes per row (width × 8).
-    pub bytes_per_row: u32,
-    /// Padded bytes per row aligned to `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`.
+    /// Width in pixels.
+    width: u32,
+    /// Padded bytes per row in the GPU staging buffer.
     pub padded_bytes_per_row: u32,
+    /// Pre-allocated row buffer for alpha stripping (width * 6 bytes).
+    row_buf: Vec<u8>,
     /// Shared encoding progress parsed from ffmpeg stderr.
     pub progress: Arc<Mutex<FfmpegProgress>>,
     /// Handle for the stderr reader thread.
@@ -342,10 +404,10 @@ pub struct FfmpegPipe {
 impl FfmpegPipe {
     /// Spawn an ffmpeg child process configured from `config`.
     pub fn spawn(config: &FfmpegConfig) -> Result<Self, String> {
-        let bytes_per_row = config.width * 8;
         let padded_bytes_per_row = padded_row_bytes(config.width);
 
         // Base input arguments: read raw video from stdin.
+        // We pipe rgbf16le (RGB, no alpha) — alpha is stripped in write_frame().
         let fps_str = format!("{}", config.fps);
         let size_str = format!("{}x{}", config.width, config.height);
 
@@ -355,7 +417,7 @@ impl FfmpegPipe {
             "-f".into(),
             "rawvideo".into(),
             "-pix_fmt".into(),
-            "rgbaf16le".into(),
+            "rgbf16le".into(),
             "-s".into(),
             size_str,
             "-r".into(),
@@ -435,47 +497,47 @@ impl FfmpegPipe {
             )
         };
 
+        let row_buf = vec![0u8; config.width as usize * PIPE_BYTES_PER_PIXEL as usize];
+
         Ok(Self {
             child,
             stdin,
-            bytes_per_row,
+            width: config.width,
             padded_bytes_per_row,
+            row_buf,
             progress,
             stderr_thread,
         })
     }
 
-    /// Write one frame to ffmpeg's stdin, stripping row padding if present.
+    /// Write one frame to ffmpeg's stdin, stripping row padding AND alpha.
     ///
-    /// `frame_data` must be exactly `padded_bytes_per_row * height` bytes.
+    /// The GPU staging buffer contains `Rgba16Float` (8 bytes/pixel) with
+    /// potential row padding. We write `rgbf16le` (6 bytes/pixel, no alpha,
+    /// no padding) to ffmpeg — saving 25% pipe bandwidth.
     pub fn write_frame(&mut self, frame_data: &[u8], height: u32) -> Result<(), String> {
         let stdin = self
             .stdin
             .as_mut()
             .ok_or_else(|| "ffmpeg stdin is closed".to_string())?;
 
-        if self.padded_bytes_per_row == self.bytes_per_row {
-            // No padding — write the whole buffer in one shot.
-            stdin
-                .write_all(frame_data)
-                .map_err(|e| format!("write to ffmpeg stdin failed: {e}"))?;
-        } else {
-            // Strip padding row by row.
-            let bpr = self.bytes_per_row as usize;
-            let pbpr = self.padded_bytes_per_row as usize;
-            for row in 0..height as usize {
-                let start = row * pbpr;
-                let end = start + bpr;
-                if end > frame_data.len() {
-                    return Err(format!(
-                        "frame_data too short: expected at least {end} bytes, got {}",
-                        frame_data.len()
-                    ));
-                }
-                stdin
-                    .write_all(&frame_data[start..end])
-                    .map_err(|e| format!("write row {row} to ffmpeg stdin failed: {e}"))?;
+        let pbpr = self.padded_bytes_per_row as usize;
+        let width = self.width as usize;
+        let gpu_bpp = GPU_BYTES_PER_PIXEL as usize;
+        let pipe_bpp = PIPE_BYTES_PER_PIXEL as usize;
+
+        let row_buf = &mut self.row_buf;
+
+        for row in 0..height as usize {
+            let row_start = row * pbpr;
+            for px in 0..width {
+                let src = row_start + px * gpu_bpp;
+                let dst = px * pipe_bpp;
+                row_buf[dst..dst + pipe_bpp].copy_from_slice(&frame_data[src..src + pipe_bpp]);
             }
+            stdin
+                .write_all(row_buf)
+                .map_err(|e| format!("write row {row} to ffmpeg failed: {e}"))?;
         }
 
         Ok(())
