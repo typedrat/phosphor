@@ -6,6 +6,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
+use crate::audio_output::{AudioOutput, SharedAudioPlayback};
 use crate::beam::SampleConsumer;
 use crate::controls_window::ControlsWindow;
 use crate::gpu::GpuState;
@@ -72,6 +73,7 @@ pub struct App {
     sim_handle: Option<std::thread::JoinHandle<()>>,
     sim_stats: Option<Arc<SimStats>>,
     sample_rate: f32,
+    audio_output: Option<AudioOutput>,
 }
 
 impl Default for App {
@@ -89,11 +91,82 @@ impl Default for App {
             sim_handle: None,
             sim_stats: None,
             sample_rate: 44100.0,
+            audio_output: None,
         }
     }
 }
 
 impl App {
+    fn spawn_audio_decode(&mut self) {
+        let Some(ui) = &mut self.ui else { return };
+        let Some(path) = ui.audio_ui.pending_file.take() else {
+            return;
+        };
+
+        ui.audio_ui.file_path = Some(path.clone());
+        ui.audio_ui.load_error = None;
+
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        ui.audio_ui.decode_receiver = Some(rx);
+
+        std::thread::Builder::new()
+            .name("audio-decode".into())
+            .spawn(move || {
+                let result = crate::beam::audio::decode_audio_file(&path);
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn audio decode thread");
+    }
+
+    fn poll_audio_decode(&mut self) {
+        let Some(ui) = &mut self.ui else { return };
+        let Some(rx) = &ui.audio_ui.decode_receiver else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(decoded)) => {
+                let shared = Arc::new(SharedAudioPlayback::new(decoded));
+                shared
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                shared
+                    .looping
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                // Create audio output (fallible — degrade to visual-only)
+                match AudioOutput::new(Arc::clone(&shared)) {
+                    Ok(output) => {
+                        self.audio_output = Some(output);
+                    }
+                    Err(e) => {
+                        tracing::warn!("No audio output: {e:#}");
+                        ui.audio_ui.load_error = Some(format!("Audio output unavailable: {e:#}"));
+                    }
+                }
+
+                // Send shared state to sim thread
+                if let Some(tx) = &self.sim_commands {
+                    let _ = tx.send(SimCommand::SetAudioShared(Some(Arc::clone(&shared))));
+                }
+
+                ui.audio_ui.shared = Some(shared);
+                ui.audio_ui.decode_receiver = None;
+            }
+            Ok(Err(e)) => {
+                ui.audio_ui.load_error = Some(format!("{e:#}"));
+                ui.audio_ui.decode_receiver = None;
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                // Still decoding
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                ui.audio_ui.load_error = Some("Decode thread crashed".to_string());
+                ui.audio_ui.decode_receiver = None;
+            }
+        }
+    }
+
     fn toggle_detach(&mut self, event_loop: &ActiveEventLoop) {
         match self.mode {
             WindowMode::Combined => {
@@ -131,6 +204,7 @@ impl App {
 
         match event {
             WindowEvent::CloseRequested => {
+                self.audio_output = None;
                 if let Some(tx) = self.sim_commands.take() {
                     let _ = tx.send(SimCommand::Shutdown);
                 }
@@ -149,6 +223,10 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Audio file loading (background decode)
+                self.spawn_audio_decode();
+                self.poll_audio_decode();
+
                 let Some(window) = &self.window else { return };
                 let Some(gpu) = &mut self.gpu else { return };
                 let Some(ui) = &mut self.ui else { return };
