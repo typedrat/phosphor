@@ -7,11 +7,14 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
 use crate::audio_output::{AudioOutput, SharedAudioPlayback};
-use crate::beam::SampleConsumer;
+use crate::beam::{BeamSample, SampleConsumer};
 use crate::controls_window::ControlsWindow;
 use crate::gpu::GpuState;
+use crate::recording::{RecordingConfig, RecordingState};
 use crate::simulation::SimCommand;
 use crate::simulation_stats::SimStats;
+use crate::types::InputMode;
+use crate::ui::recording_panel::RecordingProgress;
 use crate::ui::{SimFrameInfo, UiState};
 
 #[derive(Default, PartialEq)]
@@ -78,6 +81,11 @@ pub struct App {
     sample_rate: f32,
     audio_output: Option<AudioOutput>,
     modifiers: winit::keyboard::ModifiersState,
+    // Recording
+    recording: Option<RecordingState>,
+    batch_request_tx: Option<crossbeam_channel::Sender<()>>,
+    batch_response_rx: Option<crossbeam_channel::Receiver<Vec<BeamSample>>>,
+    recording_cancel_requested: bool,
 }
 
 impl Default for App {
@@ -97,6 +105,10 @@ impl Default for App {
             sample_rate: 44100.0,
             audio_output: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
+            recording: None,
+            batch_request_tx: None,
+            batch_response_rx: None,
+            recording_cancel_requested: false,
         }
     }
 }
@@ -187,6 +199,151 @@ impl App {
         }
     }
 
+    fn start_recording(&mut self) {
+        // Check ffmpeg availability
+        if let Err(e) = crate::recording::ffmpeg::check_ffmpeg() {
+            tracing::error!("Cannot record: {e}");
+            return;
+        }
+
+        let gpu = match &mut self.gpu {
+            Some(g) => g,
+            None => return,
+        };
+        let ui = match &mut self.ui {
+            Some(u) => u,
+            None => return,
+        };
+        let sim_tx = match &self.sim_commands {
+            Some(tx) => tx,
+            None => return,
+        };
+
+        let (width, height) = ui
+            .recording
+            .effective_resolution(gpu.device.limits().max_texture_dimension_2d);
+        let fps = ui.recording.effective_fps();
+
+        // Calculate total frames
+        let total_frames = if ui.input_mode == InputMode::Audio {
+            if let Some(shared) = &ui.audio_ui.shared {
+                let total_audio_frames = shared.samples.len() / shared.channels as usize;
+                let duration_secs = total_audio_frames as f64 / shared.sample_rate as f64;
+                (duration_secs * fps as f64).ceil() as u64
+            } else {
+                tracing::error!("No audio loaded for Audio mode recording");
+                return;
+            }
+        } else {
+            (ui.recording.duration_secs as f64 * fps as f64).ceil() as u64
+        };
+
+        let samples_per_frame = (self.sample_rate / fps as f32).round() as usize;
+
+        // Create batch channels
+        let (req_tx, req_rx) = crossbeam_channel::bounded(1);
+        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+
+        // Send batch mode command to sim thread
+        let _ = sim_tx.send(SimCommand::StartBatchMode {
+            samples_per_frame,
+            frame_request_rx: req_rx,
+            frame_response_tx: resp_tx,
+        });
+
+        // Rewind audio for recording
+        if ui.input_mode == InputMode::Audio {
+            let _ = sim_tx.send(SimCommand::RewindRecordingAudio);
+        }
+
+        // Prepare GPU for offscreen rendering
+        let resolution = crate::types::Resolution::new(width, height);
+        gpu.prepare_recording(resolution);
+
+        // Set viewport offset to 0 for recording (no sidebar)
+        gpu.composite_params.viewport_offset = [0.0, 0.0];
+        gpu.composite_params.viewport_size = [width as f32, height as f32];
+
+        let output_path = match &ui.recording.output_path {
+            Some(p) => p.clone(),
+            None => {
+                tracing::error!("No output path set");
+                let _ = sim_tx.send(SimCommand::StopBatchMode);
+                return;
+            }
+        };
+
+        let custom_args = if ui.recording.custom_ffmpeg_args.trim().is_empty() {
+            None
+        } else {
+            Some(ui.recording.custom_ffmpeg_args.clone())
+        };
+
+        let audio_path = if ui.input_mode == InputMode::Audio {
+            ui.audio_ui.file_path.clone()
+        } else {
+            None
+        };
+
+        let config = RecordingConfig {
+            width,
+            height,
+            fps,
+            output_path,
+            audio_path,
+            preset: ui.recording.encoding_preset,
+            custom_args,
+            pre_roll_frames: 30, // ~0.5s at 60fps
+            total_frames,
+        };
+
+        match RecordingState::start(&gpu.device, config, self.sample_rate as u32) {
+            Ok(state) => {
+                tracing::info!(
+                    "Recording started: {}x{} @ {} fps, {} frames",
+                    width,
+                    height,
+                    fps,
+                    total_frames
+                );
+                self.recording = Some(state);
+                self.batch_request_tx = Some(req_tx);
+                self.batch_response_rx = Some(resp_rx);
+                self.recording_cancel_requested = false;
+            }
+            Err(e) => {
+                tracing::error!("Failed to start recording: {e}");
+                let _ = sim_tx.send(SimCommand::StopBatchMode);
+                gpu.end_recording();
+                ui.recording.recording_progress = None;
+            }
+        }
+    }
+
+    fn stop_recording(&mut self) {
+        if let Some(state) = self.recording.take()
+            && let Err(e) = state.finish()
+        {
+            tracing::error!("Error finishing recording: {e}");
+        }
+
+        if let Some(tx) = &self.sim_commands {
+            let _ = tx.send(SimCommand::StopBatchMode);
+        }
+
+        self.batch_request_tx = None;
+        self.batch_response_rx = None;
+        self.recording_cancel_requested = false;
+
+        if let Some(gpu) = &mut self.gpu {
+            gpu.end_recording();
+        }
+
+        if let Some(ui) = &mut self.ui {
+            ui.recording.recording_progress = None;
+        }
+    }
+
     fn toggle_detach(&mut self, event_loop: &ActiveEventLoop) {
         match self.mode {
             WindowMode::Combined => {
@@ -253,6 +410,31 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Check recording start/stop signals before borrowing ui
+                let want_start = self
+                    .ui
+                    .as_ref()
+                    .is_some_and(|ui| ui.recording.start_requested);
+                let want_cancel = self
+                    .ui
+                    .as_ref()
+                    .is_some_and(|ui| ui.recording.cancel_requested);
+
+                if want_start {
+                    if let Some(ui) = &mut self.ui {
+                        ui.recording.start_requested = false;
+                    }
+                    self.start_recording();
+                }
+                if want_cancel || self.recording_cancel_requested {
+                    if let Some(ui) = &mut self.ui {
+                        ui.recording.cancel_requested = false;
+                    }
+                    self.stop_recording();
+                }
+
+                let is_recording = self.recording.is_some();
+
                 // Audio file loading (background decode)
                 self.spawn_audio_decode();
                 self.poll_audio_decode();
@@ -262,30 +444,53 @@ impl App {
                 let Some(ui) = &mut self.ui else { return };
 
                 // Phosphor change: rebuild decay/emission/spectral params + buffer
-                if ui.phosphor_changed() {
+                if !is_recording && ui.phosphor_changed() {
                     gpu.switch_phosphor(ui.selected_phosphor());
                 }
 
-                // Apply UI state to GPU parameters
-                crate::frame::sync_gpu_params(gpu, ui);
+                // Apply UI state to GPU parameters (skip during recording)
+                crate::frame::sync_gpu_params(gpu, ui, is_recording);
 
                 // Feed accumulation buffer size to UI for display
                 ui.accum_size = Some(gpu.accum.resolution);
 
-                // Drain samples from simulation thread's ring buffer.
-                // Cap at 8x frame interval — arc-length resampling can expand
-                // audio samples significantly, so 2x was too tight.
-                let max_dt = self.frame_interval.as_secs_f32() * 8.0;
-                let max_samples = (self.sample_rate * max_dt) as usize;
-                let samples = self
-                    .sim_consumer
-                    .as_mut()
-                    .map(|c| c.drain_up_to(max_samples))
-                    .unwrap_or_default();
-                let sim_dt = if samples.is_empty() {
-                    0.0
+                // Sample acquisition: batch mode when recording, ring buffer otherwise
+                let (samples, sim_dt) = if is_recording {
+                    if let (Some(req_tx), Some(resp_rx)) =
+                        (&self.batch_request_tx, &self.batch_response_rx)
+                    {
+                        let _ = req_tx.send(());
+                        match resp_rx.recv() {
+                            Ok(batch) => {
+                                let dt = self.recording.as_ref().map_or(0.0, |r| r.dt);
+                                (batch, dt)
+                            }
+                            Err(_) => {
+                                tracing::error!("Batch response channel disconnected");
+                                self.recording_cancel_requested = true;
+                                (vec![], 0.0)
+                            }
+                        }
+                    } else {
+                        (vec![], 0.0)
+                    }
                 } else {
-                    samples.len() as f32 / self.sample_rate
+                    // Drain samples from simulation thread's ring buffer.
+                    // Cap at 8x frame interval — arc-length resampling can expand
+                    // audio samples significantly, so 2x was too tight.
+                    let max_dt = self.frame_interval.as_secs_f32() * 8.0;
+                    let max_samples = (self.sample_rate * max_dt) as usize;
+                    let drained = self
+                        .sim_consumer
+                        .as_mut()
+                        .map(|c| c.drain_up_to(max_samples))
+                        .unwrap_or_default();
+                    let dt = if drained.is_empty() {
+                        0.0
+                    } else {
+                        drained.len() as f32 / self.sample_rate
+                    };
+                    (drained, dt)
                 };
 
                 // Build per-frame simulation info for the engineer panel
@@ -323,27 +528,29 @@ impl App {
                     ui.audio_ui.shared.as_ref(),
                 );
 
-                // Forward UI state changes to the simulation thread
-                let sidebar_width = if self.mode == WindowMode::Combined {
-                    ui.panel_width
-                } else {
-                    0.0
-                };
-                gpu.composite_params.viewport_offset = [sidebar_width, 0.0];
-                gpu.composite_params.viewport_size = [
-                    gpu.surface_config.width as f32 - sidebar_width,
-                    gpu.surface_config.height as f32,
-                ];
+                // Forward UI state changes to the simulation thread (skip during recording)
+                if !is_recording {
+                    let sidebar_width = if self.mode == WindowMode::Combined {
+                        ui.panel_width
+                    } else {
+                        0.0
+                    };
+                    gpu.composite_params.viewport_offset = [sidebar_width, 0.0];
+                    gpu.composite_params.viewport_size = [
+                        gpu.surface_config.width as f32 - sidebar_width,
+                        gpu.surface_config.height as f32,
+                    ];
 
-                if let Some(tx) = &self.sim_commands {
-                    crate::frame::dispatch_sim_commands(
-                        tx,
-                        ui,
-                        gpu,
-                        sidebar_width,
-                        &mut self.sample_rate,
-                        &mut self.sim_consumer,
-                    );
+                    if let Some(tx) = &self.sim_commands {
+                        crate::frame::dispatch_sim_commands(
+                            tx,
+                            ui,
+                            gpu,
+                            sidebar_width,
+                            &mut self.sample_rate,
+                            &mut self.sim_consumer,
+                        );
+                    }
                 }
 
                 // Build overlay render args (need mutable ref to overlay renderer)
@@ -351,7 +558,16 @@ impl App {
                     .as_ref()
                     .and_then(|output| ui.media_overlay.renderer.as_mut().map(|r| (r, output)));
 
-                match gpu.render(&samples, sim_dt, egui_output.as_ref(), overlay_render) {
+                // Get offscreen view for recording
+                let offscreen_view = self.recording.as_ref().map(|r| &r.offscreen_view);
+
+                match gpu.render(
+                    &samples,
+                    sim_dt,
+                    egui_output.as_ref(),
+                    overlay_render,
+                    offscreen_view,
+                ) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
@@ -363,6 +579,55 @@ impl App {
                     }
                     Err(e) => {
                         tracing::warn!("Surface error: {e:?}");
+                    }
+                }
+
+                // Recording: readback + pipe + advance
+                if let Some(recording) = &mut self.recording {
+                    // Encode copy from offscreen texture to staging buffer
+                    let mut encoder =
+                        gpu.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("recording_readback"),
+                            });
+                    recording
+                        .readback
+                        .copy_from_texture(&mut encoder, &recording.offscreen_texture);
+                    gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                    if !recording.is_pre_roll() {
+                        // Read back and write to ffmpeg pipe
+                        let mut frame_data = Vec::new();
+                        recording.readback.read_mapped(&gpu.device, |data| {
+                            frame_data.extend_from_slice(data);
+                        });
+
+                        let height = recording.resolution.height;
+                        if let Err(e) = recording.pipe.write_frame(&frame_data, height) {
+                            tracing::error!("Failed to write frame to ffmpeg: {e}");
+                            self.recording_cancel_requested = true;
+                        }
+                    } else {
+                        // Still need to let the GPU finish the copy before next frame
+                        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                    }
+
+                    recording.advance_frame();
+
+                    // Update UI progress
+                    ui.recording.recording_progress = Some(RecordingProgress {
+                        current_frame: recording.current_frame,
+                        total_frames: recording.total_frames,
+                        elapsed: recording.elapsed(),
+                        pre_rolling: recording.is_pre_roll(),
+                    });
+
+                    // Check completion
+                    if recording.is_complete() {
+                        tracing::info!("Recording complete");
+                        // Need to stop recording — set flag for next frame
+                        // (can't call self.stop_recording() while borrowing self.recording)
+                        self.recording_cancel_requested = true;
                     }
                 }
             }
@@ -542,15 +807,21 @@ impl ApplicationHandler for App {
         if let Some(controls) = &self.controls {
             controls.window.request_redraw();
         }
-        // Pace frames to the monitor's native refresh rate. Fifo present
-        // mode should do this via swapchain blocking, but doesn't reliably
-        // engage on all Linux Vulkan compositors.
-        self.next_frame += self.frame_interval;
-        // If we fell behind (e.g. long frame), reset to avoid a burst of catch-up frames
-        let now = Instant::now();
-        if self.next_frame < now {
-            self.next_frame = now + self.frame_interval;
+
+        if self.recording.is_some() {
+            // Recording mode: render as fast as possible
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else {
+            // Pace frames to the monitor's native refresh rate. Fifo present
+            // mode should do this via swapchain blocking, but doesn't reliably
+            // engage on all Linux Vulkan compositors.
+            self.next_frame += self.frame_interval;
+            // If we fell behind (e.g. long frame), reset to avoid a burst of catch-up frames
+            let now = Instant::now();
+            if self.next_frame < now {
+                self.next_frame = now + self.frame_interval;
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }

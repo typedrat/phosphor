@@ -5,7 +5,11 @@ use crate::types::Resolution;
 use crate::ui::UiState;
 
 /// Apply UI state to GPU pipeline parameters. Called once per frame.
-pub fn sync_gpu_params(gpu: &mut GpuState, ui: &UiState) {
+/// When `is_recording` is true, skip all parameter updates to freeze state.
+pub fn sync_gpu_params(gpu: &mut GpuState, ui: &UiState, is_recording: bool) {
+    if is_recording {
+        return;
+    }
     let eng = &ui.engineer;
     let scale = eng.accum_resolution_scale;
 
