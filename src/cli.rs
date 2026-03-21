@@ -267,6 +267,7 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
 
     let pipe = FfmpegPipe::spawn(&ffmpeg_config)
         .map_err(|e| anyhow::anyhow!("failed to spawn ffmpeg: {e}"))?;
+    let ffmpeg_progress = Arc::clone(&pipe.progress);
     let pipe_writer = PipeWriterThread::spawn(pipe, height);
 
     eprintln!(
@@ -310,10 +311,11 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
 
         // Read back the PREVIOUS frame (double-buffered, one frame behind)
         if let Some(data) = readback.read_pending(&gpu.device)
-            && let Err(e) = pipe_writer.send(data) {
-                eprintln!("Error sending frame to pipe writer: {e}");
-                break;
-            }
+            && let Err(e) = pipe_writer.send(data)
+        {
+            eprintln!("Error sending frame to pipe writer: {e}");
+            break;
+        }
 
         readback.advance();
 
@@ -329,9 +331,17 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
             } else {
                 0.0
             };
+            let enc = ffmpeg_progress.lock().unwrap().clone();
             eprint!(
-                "\r  {:.1}% ({}/{}) — {:.1} fps — ETA {:.0}s    ",
-                pct, frame, total_frames, fps_actual, eta
+                "\r  {:.1}% ({}/{}) — render {:.1} fps — encode {:.1} fps — {:.0} kbps — {} — ETA {:.0}s    ",
+                pct,
+                frame,
+                total_frames,
+                fps_actual,
+                enc.encode_fps,
+                enc.bitrate_kbps,
+                enc.output_size,
+                eta,
             );
         }
     }
@@ -340,9 +350,10 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
 
     // Flush the last pending frame (double-buffer is one frame behind)
     if let Some(data) = readback.flush(&gpu.device)
-        && let Err(e) = pipe_writer.send(data) {
-            eprintln!("Error sending final frame to pipe writer: {e}");
-        }
+        && let Err(e) = pipe_writer.send(data)
+    {
+        eprintln!("Error sending final frame to pipe writer: {e}");
+    }
 
     // Finish ffmpeg — close channel and wait for the writer thread + ffmpeg
     let elapsed = started.elapsed();

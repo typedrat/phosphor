@@ -1,8 +1,113 @@
-use std::io::Write;
+use std::io::{BufReader, Read as _, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use tracing::{error, info, warn};
+
+// ---------------------------------------------------------------------------
+// FfmpegProgress
+// ---------------------------------------------------------------------------
+
+/// Parsed ffmpeg encoding progress.
+#[derive(Clone, Default)]
+pub struct FfmpegProgress {
+    pub encode_fps: f64,
+    pub bitrate_kbps: f64,
+    pub output_size: String,
+    pub speed: f64,
+}
+
+/// Parse a single ffmpeg progress line into an `FfmpegProgress`.
+///
+/// ffmpeg progress lines look like:
+/// `frame=  123 fps= 45 q=25.4 size=     256KiB time=00:00:02.05 bitrate=1024.0kbits/s speed=0.9x`
+fn parse_ffmpeg_progress(line: &str) -> Option<FfmpegProgress> {
+    if !line.contains("frame=") {
+        return None;
+    }
+
+    let mut progress = FfmpegProgress::default();
+
+    // Helper: find "key=" then grab the next non-whitespace token.
+    let extract = |key: &str| -> Option<&str> {
+        let idx = line.find(key)?;
+        let after = &line[idx + key.len()..];
+        let trimmed = after.trim_start();
+        trimmed.split_whitespace().next()
+    };
+
+    if let Some(v) = extract("fps=") {
+        progress.encode_fps = v.parse().unwrap_or(0.0);
+    }
+    if let Some(v) = extract("size=") {
+        progress.output_size = v.to_string();
+    }
+    if let Some(v) = extract("bitrate=") {
+        // e.g. "1024.0kbits/s" or "N/A"
+        if let Some(stripped) = v.strip_suffix("kbits/s") {
+            progress.bitrate_kbps = stripped.parse().unwrap_or(0.0);
+        }
+    }
+    if let Some(v) = extract("speed=") {
+        // e.g. "0.9x" or "N/A"
+        if let Some(stripped) = v.strip_suffix('x') {
+            progress.speed = stripped.parse().unwrap_or(0.0);
+        }
+    }
+
+    Some(progress)
+}
+
+/// Read ffmpeg stderr byte-by-byte, splitting on `\r` or `\n`, and update
+/// the shared progress. Header lines (before any `frame=`) are logged.
+fn stderr_reader_loop(stderr: impl std::io::Read, progress: Arc<Mutex<FfmpegProgress>>) {
+    let mut reader = BufReader::new(stderr);
+    let mut buf = Vec::with_capacity(512);
+
+    // Read byte-by-byte since ffmpeg uses \r for progress lines.
+    loop {
+        let mut byte = [0u8; 1];
+        match reader.read(&mut byte) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                if byte[0] == b'\r' || byte[0] == b'\n' {
+                    if buf.is_empty() {
+                        continue;
+                    }
+                    let line = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(p) = parse_ffmpeg_progress(&line) {
+                        if let Ok(mut guard) = progress.lock() {
+                            *guard = p;
+                        }
+                    } else {
+                        // Header / info line — log it
+                        info!(target: "ffmpeg", "{}", line.trim());
+                    }
+                    buf.clear();
+                } else {
+                    buf.push(byte[0]);
+                }
+            }
+            Err(e) => {
+                warn!("ffmpeg stderr read error: {e}");
+                break;
+            }
+        }
+    }
+
+    // Flush any remaining partial line
+    if !buf.is_empty() {
+        let line = String::from_utf8_lossy(&buf).to_string();
+        if let Some(p) = parse_ffmpeg_progress(&line) {
+            if let Ok(mut guard) = progress.lock() {
+                *guard = p;
+            }
+        } else {
+            info!(target: "ffmpeg", "{}", line.trim());
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // EncodingPreset
@@ -228,6 +333,10 @@ pub struct FfmpegPipe {
     pub bytes_per_row: u32,
     /// Padded bytes per row aligned to `wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`.
     pub padded_bytes_per_row: u32,
+    /// Shared encoding progress parsed from ffmpeg stderr.
+    pub progress: Arc<Mutex<FfmpegProgress>>,
+    /// Handle for the stderr reader thread.
+    stderr_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FfmpegPipe {
@@ -304,17 +413,35 @@ impl FfmpegPipe {
             .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to spawn ffmpeg: {e}"))?;
 
         let stdin = child.stdin.take();
+
+        // Spawn a thread to read stderr and parse progress lines.
+        let progress = Arc::new(Mutex::new(FfmpegProgress::default()));
+        let stderr_thread = {
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "failed to capture ffmpeg stderr".to_string())?;
+            let progress = Arc::clone(&progress);
+            Some(
+                std::thread::Builder::new()
+                    .name("ffmpeg-stderr".into())
+                    .spawn(move || stderr_reader_loop(stderr, progress))
+                    .map_err(|e| format!("failed to spawn stderr reader: {e}"))?,
+            )
+        };
 
         Ok(Self {
             child,
             stdin,
             bytes_per_row,
             padded_bytes_per_row,
+            progress,
+            stderr_thread,
         })
     }
 
@@ -364,6 +491,11 @@ impl FfmpegPipe {
             .child
             .wait()
             .map_err(|e| format!("failed to wait for ffmpeg: {e}"))?;
+
+        // Join the stderr reader thread.
+        if let Some(handle) = self.stderr_thread.take() {
+            let _ = handle.join();
+        }
 
         if status.success() {
             info!("ffmpeg finished successfully");
@@ -453,6 +585,11 @@ impl Drop for FfmpegPipe {
             Err(e) => {
                 warn!("could not wait for ffmpeg on drop: {e}");
             }
+        }
+
+        // Join the stderr reader thread.
+        if let Some(handle) = self.stderr_thread.take() {
+            let _ = handle.join();
         }
     }
 }
