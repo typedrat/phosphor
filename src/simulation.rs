@@ -476,7 +476,7 @@ pub fn run_simulation(
         // Batch-on-demand mode: wait for a frame request and respond with samples
         if let Some(ref bm) = batch_mode {
             // Block until the recorder requests a frame (or the channel closes)
-            if let Err(_) = bm.frame_request_rx.recv() {
+            if bm.frame_request_rx.recv().is_err() {
                 // Requester disconnected — exit batch mode
                 tracing::info!("batch mode request channel closed, exiting batch mode");
                 batch_mode = None;
