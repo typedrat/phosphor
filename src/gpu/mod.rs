@@ -3,6 +3,7 @@ pub mod beam_write;
 pub mod composite;
 pub mod decay;
 pub mod faceplate_scatter;
+pub mod preview_blit;
 pub mod profiler;
 pub mod spectral_resolve;
 
