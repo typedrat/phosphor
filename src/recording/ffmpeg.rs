@@ -586,8 +586,14 @@ pub struct PipeWriterThread {
 impl PipeWriterThread {
     /// Spawn the background writer thread. Ownership of the `FfmpegPipe` moves
     /// into the thread; it will be finished when the channel closes.
-    pub fn spawn(mut pipe: FfmpegPipe, height: u32) -> Self {
-        let (sender, receiver) = crossbeam_channel::bounded::<Vec<u8>>(2);
+    ///
+    /// `buffer_frames`: number of frames to buffer. Use -1 for unbounded.
+    pub fn spawn(mut pipe: FfmpegPipe, height: u32, buffer_frames: i32) -> Self {
+        let (sender, receiver) = if buffer_frames < 0 {
+            crossbeam_channel::unbounded::<Vec<u8>>()
+        } else {
+            crossbeam_channel::bounded::<Vec<u8>>(buffer_frames.max(1) as usize)
+        };
 
         let handle = std::thread::Builder::new()
             .name("pipe-writer".into())

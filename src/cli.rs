@@ -57,6 +57,11 @@ pub struct Cli {
     /// Pre-roll frames (warm up phosphor before recording)
     #[arg(long)]
     pub pre_roll: Option<u32>,
+
+    /// Pipe buffer size (frames buffered between render and ffmpeg).
+    /// Use -1 for unbounded. Default: 2.
+    #[arg(long, default_value_t = 2, allow_hyphen_values = true)]
+    pub pipe_buffer: i32,
 }
 
 fn parse_resolution(s: &str) -> anyhow::Result<(u32, u32)> {
@@ -269,7 +274,7 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
     let pipe = FfmpegPipe::spawn(&ffmpeg_config)
         .map_err(|e| anyhow::anyhow!("failed to spawn ffmpeg: {e}"))?;
     let ffmpeg_progress = Arc::clone(&pipe.progress);
-    let pipe_writer = PipeWriterThread::spawn(pipe, height);
+    let pipe_writer = PipeWriterThread::spawn(pipe, height, cli.pipe_buffer);
 
     // Progress bar
     let pb = ProgressBar::new(total_frames);
