@@ -293,7 +293,7 @@ impl App {
             audio_path,
             preset: ui.recording.encoding_preset,
             custom_args,
-            pre_roll_frames: 30, // ~0.5s at 60fps
+            pre_roll_frames: fps, // 1 second of pre-roll
             total_frames,
         };
 
@@ -612,7 +612,14 @@ impl App {
                         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
                     }
 
-                    recording.advance_frame();
+                    let preroll_just_ended = recording.advance_frame();
+                    if preroll_just_ended {
+                        // Rewind audio to start so recorded video begins at t=0
+                        if let Some(ref tx) = self.sim_commands {
+                            let _ = tx.send(SimCommand::RewindRecordingAudio);
+                        }
+                        tracing::info!("Pre-roll complete, audio rewound to start");
+                    }
 
                     // Update UI progress
                     ui.recording.recording_progress = Some(RecordingProgress {
