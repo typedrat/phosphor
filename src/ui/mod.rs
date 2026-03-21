@@ -179,19 +179,6 @@ impl UiState {
                         }
                     });
             }
-
-            // Media overlay — viewport is the area not covered by the panel
-            let screen = egui_ctx.viewport_rect();
-            let viewport = egui::Rect::from_min_size(
-                egui::pos2(self.panel_width, 0.0),
-                egui::vec2(screen.width() - self.panel_width, screen.height()),
-            );
-            self.media_overlay.show(
-                egui_ctx,
-                viewport,
-                self.input_mode,
-                self.audio_ui.shared.as_ref(),
-            );
         });
 
         let egui::FullOutput {

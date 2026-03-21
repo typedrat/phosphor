@@ -193,8 +193,17 @@ impl App {
     }
 
     fn handle_viewport_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
-        // Pass events to egui (handles both panel in Combined and overlay in Detached mode)
+        // Always forward events to the media overlay (works in both modes)
         if let Some(ui) = &mut self.ui
+            && let Some(window) = &self.window
+        {
+            ui.media_overlay.on_event(window, &event);
+        }
+
+        // Only pass events to the shared egui context in Combined mode
+        // (in Detached mode, the panel renders on the controls window)
+        if self.mode == WindowMode::Combined
+            && let Some(ui) = &mut self.ui
             && let Some(window) = &self.window
         {
             let response = ui.on_event(window, &event);
@@ -265,14 +274,33 @@ impl App {
                     buffer_pending: self.sim_consumer.as_ref().map_or(0, |c| c.pending()),
                 };
 
-                // Run egui frame (overlay visible in both Combined and Detached modes)
-                let timings = gpu.profiler.as_ref().map(|p| &p.history);
-                let egui_output = Some(ui.run(
+                // Run shared egui frame only in Combined mode (panel + sidebar)
+                let egui_output = if self.mode == WindowMode::Combined {
+                    let timings = gpu.profiler.as_ref().map(|p| &p.history);
+                    Some(ui.run(
+                        window,
+                        timings,
+                        self.sim_stats.as_ref(),
+                        Some(&sim_frame_info),
+                    ))
+                } else {
+                    None
+                };
+
+                // Run media overlay (separate egui context, works in both modes)
+                let viewport_rect = egui::Rect::from_min_size(
+                    egui::pos2(ui.panel_width, 0.0),
+                    egui::vec2(
+                        gpu.surface_config.width as f32 - ui.panel_width,
+                        gpu.surface_config.height as f32,
+                    ),
+                );
+                let overlay_output = ui.media_overlay.run(
                     window,
-                    timings,
-                    self.sim_stats.as_ref(),
-                    Some(&sim_frame_info),
-                ));
+                    viewport_rect,
+                    ui.input_mode,
+                    ui.audio_ui.shared.as_ref(),
+                );
 
                 // Forward UI state changes to the simulation thread
                 let sidebar_width = if self.mode == WindowMode::Combined {
@@ -297,7 +325,12 @@ impl App {
                     );
                 }
 
-                match gpu.render(&samples, sim_dt, egui_output.as_ref()) {
+                // Build overlay render args (need mutable ref to overlay renderer)
+                let overlay_render = overlay_output
+                    .as_ref()
+                    .and_then(|output| ui.media_overlay.renderer.as_mut().map(|r| (r, output)));
+
+                match gpu.render(&samples, sim_dt, egui_output.as_ref(), overlay_render) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
@@ -403,7 +436,9 @@ impl ApplicationHandler for App {
         }
 
         let mut gpu = GpuState::new(window.clone());
-        let ui = UiState::new(&window);
+        let mut ui = UiState::new(&window);
+        ui.media_overlay
+            .init(&window, &gpu.device, gpu.surface_config.format);
         gpu.switch_phosphor(ui.selected_phosphor());
 
         // Spawn simulation thread

@@ -268,6 +268,7 @@ impl GpuState {
         samples: &[BeamSample],
         dt: f32,
         egui: Option<&EguiRenderOutput>,
+        overlay: Option<(&mut egui_wgpu::Renderer, &EguiRenderOutput)>,
     ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -375,6 +376,27 @@ impl GpuState {
 
             for id in &egui.textures_delta.free {
                 self.egui_renderer.free_texture(id);
+            }
+        }
+
+        // Media overlay pass (separate egui context/renderer)
+        if let Some((overlay_renderer, overlay_output)) = overlay {
+            for (id, delta) in &overlay_output.textures_delta.set {
+                overlay_renderer.update_texture(&self.device, &self.queue, *id, delta);
+            }
+
+            overlay_renderer.update_buffers(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                &overlay_output.primitives,
+                &overlay_output.screen_descriptor,
+            );
+
+            render_egui_pass(overlay_renderer, &mut encoder, &view, overlay_output);
+
+            for id in &overlay_output.textures_delta.free {
+                overlay_renderer.free_texture(id);
             }
         }
 
