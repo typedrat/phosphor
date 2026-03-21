@@ -291,6 +291,7 @@ impl GpuState {
         dt: f32,
         egui: Option<&EguiRenderOutput>,
         overlay: Option<(&mut egui_wgpu::Renderer, &EguiRenderOutput)>,
+        offscreen_target: Option<&wgpu::TextureView>,
     ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -364,11 +365,12 @@ impl GpuState {
             profiler.timestamp(&mut encoder, GpuQuery::AfterFaceplateScatter);
         }
 
-        // Composite pass: HDR + faceplate_scatter → display
+        // Composite pass: HDR + faceplate_scatter → display (or offscreen target)
+        let composite_target = offscreen_target.unwrap_or(&view);
         self.composite.render(
             &self.device,
             &mut encoder,
-            &view,
+            composite_target,
             &self.composite_params,
             &self.hdr,
             &self.faceplate_scatter_textures,
@@ -377,6 +379,11 @@ impl GpuState {
             profiler.timestamp(&mut encoder, GpuQuery::AfterComposite);
             // Resolve all queries into the buffer for reading next frame
             profiler.resolve(&mut encoder);
+        }
+
+        // Preview blit: offscreen → swapchain (when recording)
+        if let (Some(offscreen), Some(blit)) = (offscreen_target, &self.preview_blit) {
+            blit.render(&self.device, &mut encoder, offscreen, &view);
         }
 
         // egui overlay pass
