@@ -97,8 +97,11 @@ impl MediaOverlay {
 
         let primitives = ctx.tessellate(shapes, pixels_per_point);
 
-        // Skip rendering if there are no primitives (overlay not visible)
-        if primitives.is_empty() {
+        // Always return output when there are texture deltas (e.g. font atlas
+        // allocation), even if no visible primitives. The renderer needs to
+        // process texture sets/frees to stay in sync with the context.
+        if primitives.is_empty() && textures_delta.set.is_empty() && textures_delta.free.is_empty()
+        {
             return None;
         }
 

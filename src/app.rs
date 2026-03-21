@@ -253,8 +253,9 @@ impl App {
                 ui.accum_size = Some(gpu.accum.resolution);
 
                 // Drain samples from simulation thread's ring buffer.
-                // Cap at 2x frame interval to prevent catastrophic decay during stalls.
-                let max_dt = self.frame_interval.as_secs_f32() * 2.0;
+                // Cap at 8x frame interval — arc-length resampling can expand
+                // audio samples significantly, so 2x was too tight.
+                let max_dt = self.frame_interval.as_secs_f32() * 8.0;
                 let max_samples = (self.sample_rate * max_dt) as usize;
                 let samples = self
                     .sim_consumer
