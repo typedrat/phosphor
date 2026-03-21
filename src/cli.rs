@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::audio_output::SharedAudioPlayback;
 use crate::gpu::GpuState;
@@ -270,14 +271,23 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
     let ffmpeg_progress = Arc::clone(&pipe.progress);
     let pipe_writer = PipeWriterThread::spawn(pipe, height);
 
-    eprintln!(
-        "Recording: {}x{} @ {} fps, {} → {}",
+    // Progress bar
+    let pb = ProgressBar::new(total_frames);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.green/dim}] {pos}/{len} ({eta})\n  render {msg}",
+        )
+        .unwrap()
+        .progress_chars("━╸─"),
+    );
+    pb.println(format!(
+        "Recording: {}x{} @ {} fps, {} -> {}",
         width,
         height,
         cli.fps,
         audio_path.display(),
         output_path.display(),
-    );
+    ));
 
     let started = Instant::now();
     let mut frame = 0u64;
@@ -285,7 +295,7 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
     // Main render loop
     while frame < total_frames {
         if cancelled.load(Ordering::Relaxed) {
-            eprintln!("Cancelled at frame {}/{}", frame, total_frames);
+            pb.abandon_with_message("cancelled");
             break;
         }
 
@@ -313,60 +323,51 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         if let Some(data) = readback.read_pending(&gpu.device)
             && let Err(e) = pipe_writer.send(data)
         {
-            eprintln!("Error sending frame to pipe writer: {e}");
+            pb.abandon_with_message(format!("pipe error: {e}"));
             break;
         }
 
         readback.advance();
 
         frame += 1;
+        pb.set_position(frame);
 
-        // Progress every 60 frames or on last frame
-        if frame.is_multiple_of(60) || frame == total_frames {
+        // Update message with render + encode stats
+        if frame.is_multiple_of(30) || frame == total_frames {
             let elapsed = started.elapsed().as_secs_f64();
-            let fps_actual = frame as f64 / elapsed;
-            let pct = (frame as f64 / total_frames as f64) * 100.0;
-            let eta = if fps_actual > 0.0 {
-                (total_frames - frame) as f64 / fps_actual
-            } else {
-                0.0
-            };
+            let render_fps = frame as f64 / elapsed;
             let enc = ffmpeg_progress.lock().unwrap().clone();
-            eprint!(
-                "\r  {:.1}% ({}/{}) — render {:.1} fps — encode {:.1} fps — {:.0} kbps — {} — ETA {:.0}s    ",
-                pct,
-                frame,
-                total_frames,
-                fps_actual,
-                enc.encode_fps,
-                enc.bitrate_kbps,
-                enc.output_size,
-                eta,
-            );
+            if enc.encode_fps > 0.0 {
+                pb.set_message(format!(
+                    "{render_fps:.0} fps | encode {:.0} fps {:.0}x | {:.0} kbps | {}",
+                    enc.encode_fps, enc.speed, enc.bitrate_kbps, enc.output_size,
+                ));
+            } else {
+                pb.set_message(format!("{render_fps:.0} fps"));
+            }
         }
     }
-
-    eprintln!();
 
     // Flush the last pending frame (double-buffer is one frame behind)
     if let Some(data) = readback.flush(&gpu.device)
         && let Err(e) = pipe_writer.send(data)
     {
-        eprintln!("Error sending final frame to pipe writer: {e}");
+        pb.println(format!("Error sending final frame: {e}"));
     }
 
     // Finish ffmpeg — close channel and wait for the writer thread + ffmpeg
+    pb.set_message("finalizing...");
     let elapsed = started.elapsed();
     if let Err(e) = pipe_writer.finish() {
-        eprintln!("Warning: ffmpeg did not exit cleanly: {e}");
+        pb.println(format!("Warning: ffmpeg did not exit cleanly: {e}"));
     }
 
-    eprintln!(
-        "Done: {} frames in {:.1}s ({:.1} fps average)",
+    pb.finish_with_message(format!(
+        "done — {} frames in {:.1}s ({:.1} fps avg)",
         frame,
         elapsed.as_secs_f64(),
         frame as f64 / elapsed.as_secs_f64(),
-    );
+    ));
     eprintln!("Output: {}", output_path.display());
 
     Ok(())
