@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
 
 use crate::audio_output::SharedAudioPlayback;
 use crate::gpu::GpuState;
@@ -346,7 +346,7 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
             if enc.encode_fps > 0.0 {
                 pb.set_message(format!(
                     "{render_fps:.0} fps {render_speed:.2}x | encode {:.0} fps {:.2}x | {:.0} kbps | {}",
-                    enc.encode_fps, enc.speed, enc.bitrate_kbps, enc.output_size,
+                    enc.encode_fps, enc.speed, enc.bitrate_kbps, HumanBytes(enc.output_size_bytes),
                 ));
             } else {
                 pb.set_message(format!("{render_fps:.0} fps {render_speed:.2}x"));

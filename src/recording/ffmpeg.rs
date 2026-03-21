@@ -14,8 +14,24 @@ use tracing::{error, info, warn};
 pub struct FfmpegProgress {
     pub encode_fps: f64,
     pub bitrate_kbps: f64,
-    pub output_size: String,
+    /// Output size in bytes.
+    pub output_size_bytes: u64,
     pub speed: f64,
+}
+
+/// Parse ffmpeg's size string (e.g. "256KiB", "1024KiB", "10MiB") to bytes.
+fn parse_size_to_bytes(s: &str) -> u64 {
+    if let Some(v) = s.strip_suffix("GiB") {
+        v.trim().parse::<f64>().unwrap_or(0.0) as u64 * 1024 * 1024 * 1024
+    } else if let Some(v) = s.strip_suffix("MiB") {
+        v.trim().parse::<f64>().unwrap_or(0.0) as u64 * 1024 * 1024
+    } else if let Some(v) = s.strip_suffix("KiB") {
+        v.trim().parse::<f64>().unwrap_or(0.0) as u64 * 1024
+    } else if let Some(v) = s.strip_suffix("kB") {
+        v.trim().parse::<f64>().unwrap_or(0.0) as u64 * 1000
+    } else {
+        s.trim().parse::<u64>().unwrap_or(0)
+    }
 }
 
 /// Parse a single ffmpeg progress line into an `FfmpegProgress`.
@@ -41,7 +57,7 @@ fn parse_ffmpeg_progress(line: &str) -> Option<FfmpegProgress> {
         progress.encode_fps = v.parse().unwrap_or(0.0);
     }
     if let Some(v) = extract("size=") {
-        progress.output_size = v.to_string();
+        progress.output_size_bytes = parse_size_to_bytes(v);
     }
     if let Some(v) = extract("bitrate=") {
         // e.g. "1024.0kbits/s" or "N/A"
