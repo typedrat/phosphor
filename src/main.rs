@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod app;
+mod audio_output;
 mod beam;
 mod controls_window;
 mod frame;

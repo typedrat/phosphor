@@ -178,11 +178,22 @@ pub fn engineer_panel(
         // -- Resolution --
         ui.heading("Resolution");
         ui.label("Internal simulation scale");
+        // Compute max scale so neither dimension exceeds GPU texture limit (8192)
+        let max_scale = if let Some(res) = accum_size {
+            let base_w = res.width as f32 / state.accum_resolution_scale;
+            let base_h = res.height as f32 / state.accum_resolution_scale;
+            let max_by_w = 8192.0 / base_w;
+            let max_by_h = 8192.0 / base_h;
+            max_by_w.min(max_by_h).min(4.0)
+        } else {
+            4.0
+        };
         ui.add(
             egui::Slider::new(&mut state.accum_resolution_scale, 0.25..=4.0)
                 .step_by(0.25)
                 .text("x"),
         );
+        state.accum_resolution_scale = state.accum_resolution_scale.min(max_scale);
         if let Some(res) = accum_size {
             ui.label(res.to_string());
         }

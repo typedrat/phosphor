@@ -6,6 +6,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId};
 
+use crate::audio_output::{AudioOutput, SharedAudioPlayback};
 use crate::beam::SampleConsumer;
 use crate::controls_window::ControlsWindow;
 use crate::gpu::GpuState;
@@ -26,7 +27,10 @@ enum GlobalAction {
     ToggleFullscreen,
 }
 
-fn check_global_shortcut(event: &WindowEvent, ctx: &egui::Context) -> Option<GlobalAction> {
+fn check_global_shortcut(
+    event: &WindowEvent,
+    modifiers: &winit::keyboard::ModifiersState,
+) -> Option<GlobalAction> {
     let WindowEvent::KeyboardInput {
         event:
             winit::event::KeyEvent {
@@ -40,7 +44,7 @@ fn check_global_shortcut(event: &WindowEvent, ctx: &egui::Context) -> Option<Glo
         return None;
     };
 
-    let has_modifier = ctx.input(|i| i.modifiers.ctrl || i.modifiers.mac_cmd);
+    let has_modifier = modifiers.control_key() || modifiers.super_key();
     if !has_modifier {
         return None;
     }
@@ -72,6 +76,8 @@ pub struct App {
     sim_handle: Option<std::thread::JoinHandle<()>>,
     sim_stats: Option<Arc<SimStats>>,
     sample_rate: f32,
+    audio_output: Option<AudioOutput>,
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl Default for App {
@@ -89,11 +95,98 @@ impl Default for App {
             sim_handle: None,
             sim_stats: None,
             sample_rate: 44100.0,
+            audio_output: None,
+            modifiers: winit::keyboard::ModifiersState::empty(),
         }
     }
 }
 
 impl App {
+    fn spawn_audio_decode(&mut self) {
+        let Some(ui) = &mut self.ui else { return };
+        let Some(path) = ui.audio_ui.pending_file.take() else {
+            return;
+        };
+
+        ui.audio_ui.file_path = Some(path.clone());
+        ui.audio_ui.load_error = None;
+
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        ui.audio_ui.decode_receiver = Some(rx);
+
+        std::thread::Builder::new()
+            .name("audio-decode".into())
+            .spawn(move || {
+                let result = crate::beam::audio::decode_audio_file(&path);
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn audio decode thread");
+    }
+
+    fn poll_audio_decode(&mut self) {
+        let Some(ui) = &mut self.ui else { return };
+        let Some(rx) = &ui.audio_ui.decode_receiver else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(Ok(decoded)) => {
+                let audio_rate = decoded.sample_rate as f32;
+                let shared = Arc::new(SharedAudioPlayback::new(decoded));
+                shared
+                    .playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                shared
+                    .looping
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                // Create audio output (fallible — degrade to visual-only)
+                match AudioOutput::new(Arc::clone(&shared)) {
+                    Ok(output) => {
+                        self.audio_output = Some(output);
+                    }
+                    Err(e) => {
+                        tracing::warn!("No audio output: {e:#}");
+                        ui.audio_ui.load_error = Some(format!("Audio output unavailable: {e:#}"));
+                    }
+                }
+
+                // Update sample rate and resize ring buffer to match audio
+                if audio_rate != self.sample_rate {
+                    self.sample_rate = audio_rate;
+                    let capacity = (self.sample_rate as usize * 3 / 2).next_power_of_two();
+                    let (producer, consumer) = crate::beam::sample_channel(capacity);
+                    self.sim_consumer = Some(consumer);
+                    if let Some(tx) = &self.sim_commands {
+                        let _ = tx.send(SimCommand::SetSampleRate {
+                            rate: self.sample_rate,
+                            producer,
+                        });
+                    }
+                }
+
+                // Send shared state to sim thread
+                if let Some(tx) = &self.sim_commands {
+                    let _ = tx.send(SimCommand::SetAudioShared(Some(Arc::clone(&shared))));
+                }
+
+                ui.audio_ui.shared = Some(shared);
+                ui.audio_ui.decode_receiver = None;
+            }
+            Ok(Err(e)) => {
+                ui.audio_ui.load_error = Some(format!("{e:#}"));
+                ui.audio_ui.decode_receiver = None;
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                // Still decoding
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                ui.audio_ui.load_error = Some("Decode thread crashed".to_string());
+                ui.audio_ui.decode_receiver = None;
+            }
+        }
+    }
+
     fn toggle_detach(&mut self, event_loop: &ActiveEventLoop) {
         match self.mode {
             WindowMode::Combined => {
@@ -102,6 +195,9 @@ impl App {
                 if let Some(controls) = ControlsWindow::new(event_loop, gpu, ui.ctx.clone()) {
                     self.controls = Some(controls);
                     self.mode = WindowMode::Detached;
+                    if let Some(ui) = &mut self.ui {
+                        ui.panel_visible = false;
+                    }
                     tracing::info!("Detached controls to separate window");
                 }
             }
@@ -117,8 +213,15 @@ impl App {
     }
 
     fn handle_viewport_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
-        // Only pass events to egui in Combined mode (viewport shouldn't
-        // consume events for an invisible panel in Detached mode)
+        // Always forward events to the media overlay (works in both modes)
+        if let Some(ui) = &mut self.ui
+            && let Some(window) = &self.window
+        {
+            ui.media_overlay.on_event(window, &event);
+        }
+
+        // Only pass events to the shared egui context in Combined mode
+        // (in Detached mode, the panel renders on the controls window)
         if self.mode == WindowMode::Combined
             && let Some(ui) = &mut self.ui
             && let Some(window) = &self.window
@@ -131,6 +234,7 @@ impl App {
 
         match event {
             WindowEvent::CloseRequested => {
+                self.audio_output = None;
                 if let Some(tx) = self.sim_commands.take() {
                     let _ = tx.send(SimCommand::Shutdown);
                 }
@@ -149,6 +253,10 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Audio file loading (background decode)
+                self.spawn_audio_decode();
+                self.poll_audio_decode();
+
                 let Some(window) = &self.window else { return };
                 let Some(gpu) = &mut self.gpu else { return };
                 let Some(ui) = &mut self.ui else { return };
@@ -165,8 +273,9 @@ impl App {
                 ui.accum_size = Some(gpu.accum.resolution);
 
                 // Drain samples from simulation thread's ring buffer.
-                // Cap at 2x frame interval to prevent catastrophic decay during stalls.
-                let max_dt = self.frame_interval.as_secs_f32() * 2.0;
+                // Cap at 8x frame interval — arc-length resampling can expand
+                // audio samples significantly, so 2x was too tight.
+                let max_dt = self.frame_interval.as_secs_f32() * 8.0;
                 let max_samples = (self.sample_rate * max_dt) as usize;
                 let samples = self
                     .sim_consumer
@@ -186,7 +295,7 @@ impl App {
                     buffer_pending: self.sim_consumer.as_ref().map_or(0, |c| c.pending()),
                 };
 
-                // Run egui frame only in Combined mode
+                // Run shared egui frame only in Combined mode (panel + sidebar)
                 let egui_output = if self.mode == WindowMode::Combined {
                     let timings = gpu.profiler.as_ref().map(|p| &p.history);
                     Some(ui.run(
@@ -198,6 +307,21 @@ impl App {
                 } else {
                     None
                 };
+
+                // Run media overlay (separate egui context, works in both modes)
+                let viewport_rect = egui::Rect::from_min_size(
+                    egui::pos2(ui.panel_width, 0.0),
+                    egui::vec2(
+                        gpu.surface_config.width as f32 - ui.panel_width,
+                        gpu.surface_config.height as f32,
+                    ),
+                );
+                let overlay_output = ui.media_overlay.run(
+                    window,
+                    viewport_rect,
+                    ui.input_mode,
+                    ui.audio_ui.shared.as_ref(),
+                );
 
                 // Forward UI state changes to the simulation thread
                 let sidebar_width = if self.mode == WindowMode::Combined {
@@ -222,7 +346,12 @@ impl App {
                     );
                 }
 
-                match gpu.render(&samples, sim_dt, egui_output.as_ref()) {
+                // Build overlay render args (need mutable ref to overlay renderer)
+                let overlay_render = overlay_output
+                    .as_ref()
+                    .and_then(|output| ui.media_overlay.renderer.as_mut().map(|r| (r, output)));
+
+                match gpu.render(&samples, sim_dt, egui_output.as_ref(), overlay_render) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
                         let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
@@ -328,7 +457,9 @@ impl ApplicationHandler for App {
         }
 
         let mut gpu = GpuState::new(window.clone());
-        let ui = UiState::new(&window);
+        let mut ui = UiState::new(&window);
+        ui.media_overlay
+            .init(&window, &gpu.device, gpu.surface_config.format);
         gpu.switch_phosphor(ui.selected_phosphor());
 
         // Spawn simulation thread
@@ -367,9 +498,12 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if let Some(ui) = &self.ui
-            && let Some(action) = check_global_shortcut(&event, &ui.ctx)
-        {
+        // Track modifier keys from any window
+        if let WindowEvent::ModifiersChanged(mods) = &event {
+            self.modifiers = mods.state();
+        }
+
+        if let Some(action) = check_global_shortcut(&event, &self.modifiers) {
             match action {
                 GlobalAction::Quit => event_loop.exit(),
                 GlobalAction::ToggleDetach => self.toggle_detach(event_loop),

@@ -25,6 +25,7 @@
       libxcursor
       libxi
       libxrandr
+      alsa-lib
     ];
 
     src = pkgs.lib.cleanSourceWith {
