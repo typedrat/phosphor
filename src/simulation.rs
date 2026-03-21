@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 
-use crate::beam::audio::AudioSource;
+use crate::audio_output::SharedAudioPlayback;
 use crate::beam::oscilloscope::{ChannelConfig, OscilloscopeSource};
 use crate::beam::vector::VectorSegment;
 use crate::beam::{BeamSample, BeamSource, BeamState, SampleProducer};
@@ -21,27 +21,12 @@ use crate::types::{ExternalState, InputMode, OscilloscopeState};
 /// that makes the phosphor visibly glow at the default settings.
 const BEAM_ENERGY_SCALE: f32 = 5000.0;
 
+#[derive(Default)]
 pub struct AudioState {
-    pub file_path: Option<PathBuf>,
-    pub source: Option<AudioSource>,
-    pub playing: bool,
-    pub looping: bool,
-    pub speed: f32,
-    pub load_error: Option<String>,
+    pub shared: Option<Arc<SharedAudioPlayback>>,
+    pub last_audio_pos: usize,
 }
 
-impl Default for AudioState {
-    fn default() -> Self {
-        Self {
-            file_path: None,
-            source: None,
-            playing: false,
-            looping: false,
-            speed: 1.0,
-            load_error: None,
-        }
-    }
-}
 
 pub struct VectorState {
     pub file_path: Option<PathBuf>,
@@ -132,25 +117,50 @@ impl InputState {
             }
             InputMode::Audio => {
                 let audio = &mut self.audio;
-                if !audio.playing {
-                    return Vec::new();
-                }
-                let Some(source) = &mut audio.source else {
+                let Some(shared) = &audio.shared else {
                     return Vec::new();
                 };
-                let adj_count = (count as f32 * audio.speed) as usize;
-                if adj_count == 0 {
+                if !shared.playing.load(Ordering::Relaxed) {
                     return Vec::new();
                 }
-                let samples = source.generate(adj_count, &beam);
-                if source.is_finished() {
-                    if audio.looping {
-                        source.seek(0.0);
-                    } else {
-                        audio.playing = false;
-                    }
+
+                let current_pos = shared.position.load(Ordering::Relaxed);
+                let last_pos = audio.last_audio_pos;
+                let channels = shared.channels as usize;
+                let dt = 1.0 / shared.sample_rate as f32;
+
+                // Detect discontinuity (seek or loop): position jumped backwards,
+                // or jumped forward by more than ~100ms of audio.
+                let max_reasonable_delta = (shared.sample_rate as f64 * 0.1) as usize;
+                let is_discontinuity = current_pos < last_pos
+                    || current_pos.wrapping_sub(last_pos) > max_reasonable_delta;
+
+                if is_discontinuity {
+                    audio.last_audio_pos = current_pos;
+                    return Vec::new();
                 }
-                samples
+
+                // Generate beam samples for [last_pos, current_pos)
+                let delta = current_pos - last_pos;
+                let samples_data = &shared.samples;
+                let mut result = Vec::with_capacity(delta);
+                for frame in last_pos..current_pos {
+                    let idx = frame * channels;
+                    if idx + 1 >= samples_data.len() {
+                        break;
+                    }
+                    let l = samples_data[idx];
+                    let r = samples_data[idx + 1];
+                    result.push(BeamSample {
+                        x: (l + 1.0) / 2.0,
+                        y: (r + 1.0) / 2.0,
+                        intensity: 1.0,
+                        dt,
+                    });
+                }
+
+                audio.last_audio_pos = current_pos;
+                result
             }
             InputMode::Vector => {
                 if self.vector.segments.is_empty() {
@@ -203,21 +213,6 @@ impl InputState {
         self.osc_source.sample_rate = osc.sample_rate;
     }
 
-    pub fn load_audio_file(&mut self, path: PathBuf) {
-        match AudioSource::load(&path) {
-            Ok(source) => {
-                self.audio.source = Some(source);
-                self.audio.file_path = Some(path);
-                self.audio.load_error = None;
-                self.audio.playing = true;
-            }
-            Err(e) => {
-                self.audio.load_error = Some(e.to_string());
-                self.audio.source = None;
-            }
-        }
-    }
-
     pub fn load_vector_file(&mut self, path: PathBuf) {
         match std::fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<Vec<VectorSegment>>(&contents) {
@@ -255,10 +250,7 @@ pub enum SimCommand {
         height: f32,
         x_offset: f32,
     },
-    LoadAudioFile(PathBuf),
-    SetAudioPlaying(bool),
-    SetAudioLooping(bool),
-    SetAudioSpeed(f32),
+    SetAudioShared(Option<Arc<SharedAudioPlayback>>),
     LoadVectorFile(PathBuf),
     /// Sample rate change — carries the new producer from a resized channel.
     /// The render thread creates the new channel and swaps its consumer.
@@ -306,10 +298,12 @@ impl SimState {
                 self.viewport_width = width;
                 self.viewport_height = height;
             }
-            SimCommand::LoadAudioFile(path) => self.input.load_audio_file(path),
-            SimCommand::SetAudioPlaying(p) => self.input.audio.playing = p,
-            SimCommand::SetAudioLooping(l) => self.input.audio.looping = l,
-            SimCommand::SetAudioSpeed(s) => self.input.audio.speed = s,
+            SimCommand::SetAudioShared(shared) => {
+                self.input.audio.last_audio_pos = shared
+                    .as_ref()
+                    .map_or(0, |s| s.position.load(Ordering::Relaxed));
+                self.input.audio.shared = shared;
+            }
             SimCommand::LoadVectorFile(path) => self.input.load_vector_file(path),
             SimCommand::SetSampleRate { rate, .. } => self.sample_rate = rate,
             SimCommand::Shutdown => {} // handled by caller

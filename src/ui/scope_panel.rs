@@ -164,21 +164,32 @@ fn audio_controls(ui: &mut egui::Ui, audio: &mut AudioUiState) {
         ui.label(name.to_string_lossy().as_ref());
     }
 
-    if audio.has_file {
+    if let Some(shared) = &audio.shared {
+        use std::sync::atomic::Ordering;
         ui.separator();
         ui.horizontal(|ui| {
-            let play_label = if audio.playing { "Pause" } else { "Play" };
+            let playing = shared.playing.load(Ordering::Relaxed);
+            let play_label = if playing { "Pause" } else { "Play" };
             if ui.button(play_label).clicked() {
-                audio.playing = !audio.playing;
+                shared.playing.store(!playing, Ordering::Relaxed);
             }
-            ui.checkbox(&mut audio.looping, "Loop");
+            let mut looping = shared.looping.load(Ordering::Relaxed);
+            if ui.checkbox(&mut looping, "Loop").changed() {
+                shared.looping.store(looping, Ordering::Relaxed);
+            }
         });
 
-        ui.add(
-            egui::Slider::new(&mut audio.speed, 0.25..=4.0)
-                .logarithmic(true)
-                .text("Speed"),
-        );
+        let mut speed = shared.speed.load(Ordering::Relaxed);
+        if ui
+            .add(
+                egui::Slider::new(&mut speed, 0.25..=4.0)
+                    .logarithmic(true)
+                    .text("Speed"),
+            )
+            .changed()
+        {
+            shared.speed.store(speed, Ordering::Relaxed);
+        }
     }
 }
 

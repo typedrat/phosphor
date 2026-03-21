@@ -59,16 +59,6 @@ pub fn dispatch_sim_commands(
         x_offset: sidebar_width,
     });
 
-    // Audio controls
-    let _ = tx.send(SimCommand::SetAudioPlaying(ui.audio_ui.playing));
-    let _ = tx.send(SimCommand::SetAudioLooping(ui.audio_ui.looping));
-    let _ = tx.send(SimCommand::SetAudioSpeed(ui.audio_ui.speed));
-    if let Some(path) = ui.audio_ui.pending_file.take() {
-        ui.audio_ui.file_path = Some(path.clone());
-        ui.audio_ui.has_file = true;
-        let _ = tx.send(SimCommand::LoadAudioFile(path));
-    }
-
     // Vector controls
     if let Some(path) = ui.vector_ui.pending_file.take() {
         ui.vector_ui.file_path = Some(path.clone());

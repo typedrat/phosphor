@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use winit::window::Window;
 
+use crate::audio_output::SharedAudioPlayback;
 use crate::gpu::profiler::TimingHistory;
 use crate::phosphor::{PhosphorType, phosphor_database};
 use crate::simulation_stats::SimStats;
@@ -28,32 +29,18 @@ pub struct EguiRenderOutput {
     pub screen_descriptor: egui_wgpu::ScreenDescriptor,
 }
 
-/// UI-only audio state (AudioSource lives on the sim thread).
+/// UI-only audio state. Playback controls (playing, looping, speed, volume)
+/// are read/written directly on SharedAudioPlayback atomics.
+#[derive(Default)]
 pub struct AudioUiState {
     pub file_path: Option<PathBuf>,
-    pub playing: bool,
-    pub looping: bool,
-    pub speed: f32,
-    pub has_file: bool,
+    pub shared: Option<Arc<SharedAudioPlayback>>,
+    pub decode_receiver:
+        Option<crossbeam_channel::Receiver<anyhow::Result<crate::audio_output::DecodedAudio>>>,
     pub load_error: Option<String>,
-    /// Set by the UI when a file is picked; consumed by the render thread
-    /// to send a LoadAudioFile command to the sim thread.
     pub pending_file: Option<PathBuf>,
 }
 
-impl Default for AudioUiState {
-    fn default() -> Self {
-        Self {
-            file_path: None,
-            playing: false,
-            looping: false,
-            speed: 1.0,
-            has_file: false,
-            load_error: None,
-            pending_file: None,
-        }
-    }
-}
 
 /// UI-only vector state (segment data lives on the sim thread).
 pub struct VectorUiState {
