@@ -544,7 +544,9 @@ impl FfmpegPipe {
 
         let row_buf = &mut self.row_buf;
 
-        for row in 0..height as usize {
+        // Iterate rows bottom-to-top: the GPU texture has (0,0) at top-left
+        // but the CRT simulation renders Y=0 at the bottom, so we flip vertically.
+        for row in (0..height as usize).rev() {
             let row_start = row * pbpr;
             for px in 0..width {
                 let src = row_start + px * gpu_bpp;
