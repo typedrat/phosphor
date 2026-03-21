@@ -20,6 +20,8 @@ pub struct RecordingConfig {
     pub custom_args: Option<String>,
     pub pre_roll_frames: u32,
     pub total_frames: u64,
+    /// Pipe buffer size in frames. -1 for unbounded.
+    pub pipe_buffer: i32,
 }
 
 /// Active recording session state.
@@ -86,7 +88,7 @@ impl RecordingState {
         };
 
         let pipe = FfmpegPipe::spawn(&ffmpeg_config).map_err(io::Error::other)?;
-        let pipe_writer = PipeWriterThread::spawn(pipe, height);
+        let pipe_writer = PipeWriterThread::spawn(pipe, height, config.pipe_buffer);
 
         let resolution = Resolution::new(width, height);
         let dt = 1.0 / fps as f32;

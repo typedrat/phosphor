@@ -295,6 +295,7 @@ impl App {
             custom_args,
             pre_roll_frames: fps, // 1 second of pre-roll
             total_frames,
+            pipe_buffer: 2, // UI path uses default
         };
 
         match RecordingState::start(&gpu.device, config, self.sample_rate as u32) {
@@ -601,10 +602,11 @@ impl App {
                     if !recording.is_pre_roll() {
                         // Read back the PREVIOUS frame (double-buffered, one frame behind)
                         if let Some(data) = recording.readback.read_pending(&gpu.device)
-                            && let Err(e) = recording.pipe_writer.send(data) {
-                                tracing::error!("Failed to send frame to pipe writer: {e}");
-                                self.recording_cancel_requested = true;
-                            }
+                            && let Err(e) = recording.pipe_writer.send(data)
+                        {
+                            tracing::error!("Failed to send frame to pipe writer: {e}");
+                            self.recording_cancel_requested = true;
+                        }
                     } else {
                         // Still need to let the GPU finish the copy before next frame
                         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
