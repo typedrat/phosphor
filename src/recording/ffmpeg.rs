@@ -376,6 +376,67 @@ impl FfmpegPipe {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PipeWriterThread
+// ---------------------------------------------------------------------------
+
+/// Background thread that writes frame data to ffmpeg stdin.
+///
+/// Receives `Vec<u8>` frame buffers over a bounded channel and writes them
+/// sequentially, decoupling GPU readback from I/O latency.
+pub struct PipeWriterThread {
+    sender: crossbeam_channel::Sender<Vec<u8>>,
+    handle: Option<std::thread::JoinHandle<Result<(), String>>>,
+}
+
+impl PipeWriterThread {
+    /// Spawn the background writer thread. Ownership of the `FfmpegPipe` moves
+    /// into the thread; it will be finished when the channel closes.
+    pub fn spawn(mut pipe: FfmpegPipe, height: u32) -> Self {
+        let (sender, receiver) = crossbeam_channel::bounded::<Vec<u8>>(2);
+
+        let handle = std::thread::Builder::new()
+            .name("pipe-writer".into())
+            .spawn(move || {
+                for frame_data in receiver {
+                    pipe.write_frame(&frame_data, height)
+                        .map_err(|e| format!("pipe writer: {e}"))?;
+                }
+                pipe.finish()
+            })
+            .expect("failed to spawn pipe-writer thread");
+
+        Self {
+            sender,
+            handle: Some(handle),
+        }
+    }
+
+    /// Send frame data to the writer thread (may block if the channel is full).
+    pub fn send(&self, data: Vec<u8>) -> Result<(), String> {
+        self.sender
+            .send(data)
+            .map_err(|_| "pipe writer thread has exited".to_string())
+    }
+
+    /// Drop the sender (signals EOF to the thread), join, and return any error.
+    pub fn finish(mut self) -> Result<(), String> {
+        // Drop sender so the receiver loop exits.
+        drop(std::mem::replace(
+            &mut self.sender,
+            crossbeam_channel::bounded(0).0,
+        ));
+
+        if let Some(handle) = self.handle.take() {
+            handle
+                .join()
+                .map_err(|_| "pipe writer thread panicked".to_string())?
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl Drop for FfmpegPipe {
     fn drop(&mut self) {
         // Ensure stdin is closed so ffmpeg isn't left waiting.

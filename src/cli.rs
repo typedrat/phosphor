@@ -8,8 +8,8 @@ use clap::Parser;
 use crate::audio_output::SharedAudioPlayback;
 use crate::gpu::GpuState;
 use crate::phosphor::phosphor_database;
-use crate::recording::ffmpeg::{EncodingPreset, FfmpegConfig, FfmpegPipe};
-use crate::recording::readback::ReadbackBuffer;
+use crate::recording::ffmpeg::{EncodingPreset, FfmpegConfig, FfmpegPipe, PipeWriterThread};
+use crate::recording::readback::DoubleReadbackBuffer;
 use crate::simulation::InputState;
 use crate::types::{InputMode, Resolution};
 
@@ -207,7 +207,7 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         view_formats: &[],
     });
     let offscreen_view = offscreen_texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let readback = ReadbackBuffer::new(&gpu.device, width, height);
+    let mut readback = DoubleReadbackBuffer::new(&gpu.device, width, height);
 
     // Create InputState for audio generation
     let mut input = InputState::default();
@@ -265,8 +265,9 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         custom_args,
     };
 
-    let mut pipe = FfmpegPipe::spawn(&ffmpeg_config)
+    let pipe = FfmpegPipe::spawn(&ffmpeg_config)
         .map_err(|e| anyhow::anyhow!("failed to spawn ffmpeg: {e}"))?;
+    let pipe_writer = PipeWriterThread::spawn(pipe, height);
 
     eprintln!(
         "Recording: {}x{} @ {} fps, {} → {}",
@@ -307,16 +308,14 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         readback.copy_from_texture(&mut encoder, &offscreen_texture);
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        let mut frame_data = Vec::new();
-        readback.read_mapped(&gpu.device, |data| {
-            frame_data.extend_from_slice(data);
-        });
+        // Read back the PREVIOUS frame (double-buffered, one frame behind)
+        if let Some(data) = readback.read_pending(&gpu.device)
+            && let Err(e) = pipe_writer.send(data) {
+                eprintln!("Error sending frame to pipe writer: {e}");
+                break;
+            }
 
-        // Write to ffmpeg
-        if let Err(e) = pipe.write_frame(&frame_data, height) {
-            eprintln!("Error writing frame to ffmpeg: {e}");
-            break;
-        }
+        readback.advance();
 
         frame += 1;
 
@@ -339,9 +338,15 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
 
     eprintln!();
 
-    // Finish ffmpeg — close stdin and wait for it to write the container trailer
+    // Flush the last pending frame (double-buffer is one frame behind)
+    if let Some(data) = readback.flush(&gpu.device)
+        && let Err(e) = pipe_writer.send(data) {
+            eprintln!("Error sending final frame to pipe writer: {e}");
+        }
+
+    // Finish ffmpeg — close channel and wait for the writer thread + ffmpeg
     let elapsed = started.elapsed();
-    if let Err(e) = pipe.finish() {
+    if let Err(e) = pipe_writer.finish() {
         eprintln!("Warning: ffmpeg did not exit cleanly: {e}");
     }
 
