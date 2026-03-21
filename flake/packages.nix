@@ -53,7 +53,8 @@
 
         postInstall = ''
           wrapProgram $out/bin/phosphor \
-            --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
+            --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs} \
+            --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.ffmpeg]}
         '';
       });
   in {
