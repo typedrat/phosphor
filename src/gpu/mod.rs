@@ -40,6 +40,7 @@ pub struct GpuState {
     // drop before the surface, which must drop before the device/instance.
     pub egui_renderer: egui_wgpu::Renderer,
     pub profiler: Option<GpuProfiler>,
+    pub preview_blit: Option<preview_blit::PreviewBlitPipeline>,
     pub composite: CompositePipeline,
     pub composite_params: CompositeParams,
     pub faceplate_scatter: FaceplateScatterPipeline,
@@ -188,6 +189,7 @@ impl GpuState {
             device,
             queue,
             profiler,
+            preview_blit: None,
             surface,
             surface_config,
             accum,
@@ -229,6 +231,25 @@ impl GpuState {
             .resize(&self.device, resolution);
         self.beam_params.width = resolution.width;
         self.beam_params.height = resolution.height;
+    }
+
+    /// Prepare GPU state for recording at the given resolution.
+    pub fn prepare_recording(&mut self, resolution: Resolution) {
+        self.resize_buffers(resolution);
+        self.composite = CompositePipeline::new(&self.device, wgpu::TextureFormat::Rgba16Float);
+        self.preview_blit = Some(preview_blit::PreviewBlitPipeline::new(
+            &self.device,
+            self.surface_config.format,
+        ));
+    }
+
+    /// Restore GPU state after recording ends.
+    pub fn end_recording(&mut self) {
+        let format = self.surface_config.format;
+        self.composite = CompositePipeline::new(&self.device, format);
+        let resolution = Resolution::new(self.surface_config.width, self.surface_config.height);
+        self.resize_buffers(resolution);
+        self.preview_blit = None;
     }
 
     /// Reconfigure GPU state for a new phosphor type. Rebuilds decay params,
