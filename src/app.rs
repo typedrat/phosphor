@@ -131,6 +131,7 @@ impl App {
 
         match rx.try_recv() {
             Ok(Ok(decoded)) => {
+                let audio_rate = decoded.sample_rate as f32;
                 let shared = Arc::new(SharedAudioPlayback::new(decoded));
                 shared
                     .playing
@@ -147,6 +148,20 @@ impl App {
                     Err(e) => {
                         tracing::warn!("No audio output: {e:#}");
                         ui.audio_ui.load_error = Some(format!("Audio output unavailable: {e:#}"));
+                    }
+                }
+
+                // Update sample rate and resize ring buffer to match audio
+                if audio_rate != self.sample_rate {
+                    self.sample_rate = audio_rate;
+                    let capacity = (self.sample_rate as usize * 3 / 2).next_power_of_two();
+                    let (producer, consumer) = crate::beam::sample_channel(capacity);
+                    self.sim_consumer = Some(consumer);
+                    if let Some(tx) = &self.sim_commands {
+                        let _ = tx.send(SimCommand::SetSampleRate {
+                            rate: self.sample_rate,
+                            producer,
+                        });
                     }
                 }
 
