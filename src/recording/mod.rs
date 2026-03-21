@@ -85,7 +85,7 @@ impl RecordingState {
             custom_args,
         };
 
-        let pipe = FfmpegPipe::spawn(&ffmpeg_config).map_err(|e| io::Error::other(e))?;
+        let pipe = FfmpegPipe::spawn(&ffmpeg_config).map_err(io::Error::other)?;
 
         let resolution = Resolution::new(width, height);
         let dt = 1.0 / fps as f32;
@@ -132,16 +132,20 @@ impl RecordingState {
 
     /// Advance the frame counter: decrements pre-roll if still pre-rolling,
     /// otherwise increments the recorded frame count.
-    pub fn advance_frame(&mut self) {
+    /// Returns true on the frame where pre-roll just completed (transition).
+    pub fn advance_frame(&mut self) -> bool {
+        let was_pre_rolling = self.pre_roll_remaining > 0;
         if self.pre_roll_remaining > 0 {
             self.pre_roll_remaining -= 1;
         } else {
             self.current_frame += 1;
         }
+        // Return true when we just transitioned out of pre-roll
+        was_pre_rolling && self.pre_roll_remaining == 0
     }
 
     /// Close the ffmpeg pipe and wait for it to finish.
     pub fn finish(self) -> io::Result<()> {
-        self.pipe.finish().map_err(|e| io::Error::other(e))
+        self.pipe.finish().map_err(io::Error::other)
     }
 }
