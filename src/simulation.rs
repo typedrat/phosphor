@@ -27,7 +27,6 @@ pub struct AudioState {
     pub last_audio_pos: usize,
 }
 
-
 pub struct VectorState {
     pub file_path: Option<PathBuf>,
     pub segments: Vec<VectorSegment>,
