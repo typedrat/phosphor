@@ -154,6 +154,13 @@ fn audio_controls(ui: &mut egui::Ui, audio: &mut AudioUiState) {
         audio.pending_file = Some(path);
     }
 
+    // Loading indicator
+    if audio.decode_receiver.is_some() {
+        ui.spinner();
+        ui.label("Loading...");
+        return;
+    }
+
     if let Some(err) = &audio.load_error {
         ui.colored_label(egui::Color32::RED, err);
     }
@@ -164,33 +171,70 @@ fn audio_controls(ui: &mut egui::Ui, audio: &mut AudioUiState) {
         ui.label(name.to_string_lossy().as_ref());
     }
 
-    if let Some(shared) = &audio.shared {
-        use std::sync::atomic::Ordering;
-        ui.separator();
-        ui.horizontal(|ui| {
-            let playing = shared.playing.load(Ordering::Relaxed);
-            let play_label = if playing { "Pause" } else { "Play" };
-            if ui.button(play_label).clicked() {
-                shared.playing.store(!playing, Ordering::Relaxed);
-            }
-            let mut looping = shared.looping.load(Ordering::Relaxed);
-            if ui.checkbox(&mut looping, "Loop").changed() {
-                shared.looping.store(looping, Ordering::Relaxed);
-            }
-        });
+    let Some(shared) = &audio.shared else {
+        return;
+    };
 
-        let mut speed = shared.speed.load(Ordering::Relaxed);
-        if ui
-            .add(
-                egui::Slider::new(&mut speed, 0.25..=4.0)
-                    .logarithmic(true)
-                    .text("Speed"),
-            )
-            .changed()
-        {
-            shared.speed.store(speed, Ordering::Relaxed);
+    use std::sync::atomic::Ordering;
+
+    ui.separator();
+
+    // Play/Pause + Loop
+    ui.horizontal(|ui| {
+        let playing = shared.playing.load(Ordering::Relaxed);
+        let play_label = if playing { "Pause" } else { "Play" };
+        if ui.button(play_label).clicked() {
+            shared.playing.store(!playing, Ordering::Relaxed);
         }
+        let mut looping = shared.looping.load(Ordering::Relaxed);
+        if ui.checkbox(&mut looping, "Loop").changed() {
+            shared.looping.store(looping, Ordering::Relaxed);
+        }
+    });
+
+    // Seek bar
+    let duration = shared.duration_secs();
+    let mut pos_secs = shared.position_secs();
+    let seek_bar = egui::Slider::new(&mut pos_secs, 0.0..=duration)
+        .show_value(false)
+        .trailing_fill(true);
+    if ui.add(seek_bar).changed() {
+        shared.seek_to_secs(pos_secs);
     }
+
+    // Position / Duration label
+    let pos_display = format_time(pos_secs);
+    let dur_display = format_time(duration);
+    ui.label(format!("{pos_display} / {dur_display}"));
+
+    // Speed
+    let mut speed = shared.speed.load(Ordering::Relaxed);
+    if ui
+        .add(
+            egui::Slider::new(&mut speed, 0.25..=4.0)
+                .logarithmic(true)
+                .text("Speed"),
+        )
+        .changed()
+    {
+        shared.speed.store(speed, Ordering::Relaxed);
+    }
+
+    // Volume
+    let mut volume = shared.volume.load(Ordering::Relaxed);
+    if ui
+        .add(egui::Slider::new(&mut volume, 0.0..=1.0).text("Volume"))
+        .changed()
+    {
+        shared.volume.store(volume, Ordering::Relaxed);
+    }
+}
+
+pub fn format_time(secs: f32) -> String {
+    let total = secs as u32;
+    let m = total / 60;
+    let s = total % 60;
+    format!("{m}:{s:02}")
 }
 
 fn vector_controls(ui: &mut egui::Ui, vector: &mut VectorUiState) {
