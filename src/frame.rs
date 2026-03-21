@@ -29,12 +29,15 @@ pub fn sync_gpu_params(gpu: &mut GpuState, ui: &UiState) {
     gpu.composite_params.curvature = eng.curvature;
     gpu.composite_params.edge_falloff = eng.edge_falloff;
 
-    // Accumulation buffer resize if resolution scale changed
+    // Accumulation buffer resize if resolution scale changed.
+    // Clamp to GPU max texture dimension (8192) to avoid create_texture failure.
+    const MAX_TEX: u32 = 8192;
     let target = Resolution::new(
-        ((gpu.surface_config.width as f32) * scale).round().max(1.0) as u32,
-        ((gpu.surface_config.height as f32) * scale)
+        (((gpu.surface_config.width as f32) * scale).round().max(1.0) as u32).min(MAX_TEX),
+        (((gpu.surface_config.height as f32) * scale)
             .round()
-            .max(1.0) as u32,
+            .max(1.0) as u32)
+            .min(MAX_TEX),
     );
     if target != gpu.accum.resolution {
         gpu.resize_buffers(target);
