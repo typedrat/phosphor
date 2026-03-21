@@ -381,16 +381,16 @@ impl Drop for FfmpegPipe {
         // Ensure stdin is closed so ffmpeg isn't left waiting.
         drop(self.stdin.take());
 
-        // Best-effort kill if the process is still running.
-        match self.child.try_wait() {
-            Ok(Some(_)) => {} // already exited
-            Ok(None) => {
-                warn!("ffmpeg still running on FfmpegPipe drop — killing");
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+        // Wait for ffmpeg to finish writing the container trailer.
+        // Don't kill it — it needs time to flush after stdin closes.
+        match self.child.wait() {
+            Ok(status) => {
+                if !status.success() {
+                    warn!("ffmpeg exited with status {status} during drop");
+                }
             }
             Err(e) => {
-                warn!("could not check ffmpeg exit status on drop: {e}");
+                warn!("could not wait for ffmpeg on drop: {e}");
             }
         }
     }
