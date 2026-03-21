@@ -321,10 +321,15 @@ impl App {
     }
 
     fn stop_recording(&mut self) {
-        if let Some(state) = self.recording.take()
-            && let Err(e) = state.finish()
-        {
-            tracing::error!("Error finishing recording: {e}");
+        if let Some(state) = self.recording.take() {
+            let device = self.gpu.as_ref().map(|g| &g.device);
+            if let Some(device) = device {
+                if let Err(e) = state.finish(device) {
+                    tracing::error!("Error finishing recording: {e}");
+                }
+            } else {
+                tracing::error!("No GPU device available to flush final recording frame");
+            }
         }
 
         if let Some(tx) = &self.sim_commands {
@@ -594,21 +599,18 @@ impl App {
                     gpu.queue.submit(std::iter::once(encoder.finish()));
 
                     if !recording.is_pre_roll() {
-                        // Read back and write to ffmpeg pipe
-                        let mut frame_data = Vec::new();
-                        recording.readback.read_mapped(&gpu.device, |data| {
-                            frame_data.extend_from_slice(data);
-                        });
-
-                        let height = recording.resolution.height;
-                        if let Err(e) = recording.pipe.write_frame(&frame_data, height) {
-                            tracing::error!("Failed to write frame to ffmpeg: {e}");
-                            self.recording_cancel_requested = true;
-                        }
+                        // Read back the PREVIOUS frame (double-buffered, one frame behind)
+                        if let Some(data) = recording.readback.read_pending(&gpu.device)
+                            && let Err(e) = recording.pipe_writer.send(data) {
+                                tracing::error!("Failed to send frame to pipe writer: {e}");
+                                self.recording_cancel_requested = true;
+                            }
                     } else {
                         // Still need to let the GPU finish the copy before next frame
                         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
                     }
+
+                    recording.readback.advance();
 
                     let preroll_just_ended = recording.advance_frame();
                     if preroll_just_ended {

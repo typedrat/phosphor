@@ -5,8 +5,8 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::recording::ffmpeg::{EncodingPreset, FfmpegConfig, FfmpegPipe};
-use crate::recording::readback::ReadbackBuffer;
+use crate::recording::ffmpeg::{EncodingPreset, FfmpegConfig, FfmpegPipe, PipeWriterThread};
+use crate::recording::readback::DoubleReadbackBuffer;
 use crate::types::Resolution;
 
 /// Configuration for starting a recording session.
@@ -24,8 +24,8 @@ pub struct RecordingConfig {
 
 /// Active recording session state.
 pub struct RecordingState {
-    pub pipe: FfmpegPipe,
-    pub readback: ReadbackBuffer,
+    pub pipe_writer: PipeWriterThread,
+    pub readback: DoubleReadbackBuffer,
     pub offscreen_texture: wgpu::Texture,
     pub offscreen_view: wgpu::TextureView,
     pub resolution: Resolution,
@@ -69,7 +69,7 @@ impl RecordingState {
 
         let offscreen_view = offscreen_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let readback = ReadbackBuffer::new(device, width, height);
+        let readback = DoubleReadbackBuffer::new(device, width, height);
 
         let custom_args = config
             .custom_args
@@ -86,13 +86,14 @@ impl RecordingState {
         };
 
         let pipe = FfmpegPipe::spawn(&ffmpeg_config).map_err(io::Error::other)?;
+        let pipe_writer = PipeWriterThread::spawn(pipe, height);
 
         let resolution = Resolution::new(width, height);
         let dt = 1.0 / fps as f32;
         let samples_per_frame = (sample_rate as f32 / fps as f32).round() as usize;
 
         Ok(Self {
-            pipe,
+            pipe_writer,
             readback,
             offscreen_texture,
             offscreen_view,
@@ -144,8 +145,12 @@ impl RecordingState {
         was_pre_rolling && self.pre_roll_remaining == 0
     }
 
-    /// Close the ffmpeg pipe and wait for it to finish.
-    pub fn finish(self) -> io::Result<()> {
-        self.pipe.finish().map_err(io::Error::other)
+    /// Flush the last pending frame and shut down the pipe writer thread.
+    pub fn finish(self, device: &wgpu::Device) -> io::Result<()> {
+        // The double-buffer is one frame behind — flush the final frame.
+        if let Some(data) = self.readback.flush(device) {
+            self.pipe_writer.send(data).map_err(io::Error::other)?;
+        }
+        self.pipe_writer.finish().map_err(io::Error::other)
     }
 }
