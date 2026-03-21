@@ -341,14 +341,15 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         if frame.is_multiple_of(30) || frame == total_frames {
             let elapsed = started.elapsed().as_secs_f64();
             let render_fps = frame as f64 / elapsed;
+            let render_speed = render_fps / cli.fps as f64;
             let enc = ffmpeg_progress.lock().unwrap().clone();
             if enc.encode_fps > 0.0 {
                 pb.set_message(format!(
-                    "{render_fps:.0} fps | encode {:.0} fps {:.0}x | {:.0} kbps | {}",
+                    "{render_fps:.0} fps {render_speed:.2}x | encode {:.0} fps {:.2}x | {:.0} kbps | {}",
                     enc.encode_fps, enc.speed, enc.bitrate_kbps, enc.output_size,
                 ));
             } else {
-                pb.set_message(format!("{render_fps:.0} fps"));
+                pb.set_message(format!("{render_fps:.0} fps {render_speed:.2}x"));
             }
         }
     }
