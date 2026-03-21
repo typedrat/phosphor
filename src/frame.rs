@@ -36,12 +36,10 @@ pub fn sync_gpu_params(gpu: &mut GpuState, ui: &UiState, is_recording: bool) {
     // Accumulation buffer resize if resolution scale changed.
     // Clamp to GPU max texture dimension (8192) to avoid create_texture failure.
     const MAX_TEX: u32 = 8192;
+    let sc = gpu.surface_config.as_ref().unwrap();
     let target = Resolution::new(
-        (((gpu.surface_config.width as f32) * scale).round().max(1.0) as u32).min(MAX_TEX),
-        (((gpu.surface_config.height as f32) * scale)
-            .round()
-            .max(1.0) as u32)
-            .min(MAX_TEX),
+        (((sc.width as f32) * scale).round().max(1.0) as u32).min(MAX_TEX),
+        (((sc.height as f32) * scale).round().max(1.0) as u32).min(MAX_TEX),
     );
     if target != gpu.accum.resolution {
         gpu.resize_buffers(target);
@@ -60,9 +58,10 @@ pub fn dispatch_sim_commands(
     let _ = tx.send(SimCommand::SetInputMode(ui.input_mode));
     let _ = tx.send(SimCommand::SetOscilloscopeParams(ui.oscilloscope.clone()));
     let _ = tx.send(SimCommand::SetFocus(ui.focus));
+    let sc = gpu.surface_config.as_ref().unwrap();
     let _ = tx.send(SimCommand::SetViewport {
-        width: gpu.surface_config.width as f32 - sidebar_width,
-        height: gpu.surface_config.height as f32,
+        width: sc.width as f32 - sidebar_width,
+        height: sc.height as f32,
         x_offset: sidebar_width,
     });
 

@@ -55,8 +55,8 @@ pub struct GpuState {
     pub emission_params: EmissionParams,
     pub hdr: HdrBuffer,
     pub accum: AccumulationBuffer,
-    pub surface: wgpu::Surface<'static>,
-    pub surface_config: wgpu::SurfaceConfiguration,
+    pub surface: Option<wgpu::Surface<'static>>,
+    pub surface_config: Option<wgpu::SurfaceConfiguration>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub adapter: wgpu::Adapter,
@@ -190,8 +190,8 @@ impl GpuState {
             queue,
             profiler,
             preview_blit: None,
-            surface,
-            surface_config,
+            surface: Some(surface),
+            surface_config: Some(surface_config),
             accum,
             hdr,
             beam_write,
@@ -211,11 +211,138 @@ impl GpuState {
         }
     }
 
+    /// Create a headless GpuState with no surface for offscreen rendering.
+    /// Used by the CLI `--record` mode.
+    pub fn new_headless(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        resolution: Resolution,
+    ) -> Self {
+        let format = wgpu::TextureFormat::Rgba16Float;
+
+        let accum = AccumulationBuffer::new(&device, resolution, 1);
+
+        let beam_write = BeamWritePipeline::new(&device);
+        let beam_params = BeamParams::new(1.5, 6.0, 0.03, resolution.width, resolution.height);
+
+        let decay = DecayPipeline::new(&device);
+        let decay_params = DecayParams::from_terms(&[], TAU_CUTOFF);
+        let emission_params = EmissionParams::from_phosphor(&[], TAU_CUTOFF);
+
+        let hdr = HdrBuffer::new(&device, resolution);
+
+        let spectral_resolve = SpectralResolvePipeline::new(&device);
+        let spectral_resolve_params = SpectralResolveParams::new();
+
+        let faceplate_scatter = FaceplateScatterPipeline::new(&device);
+        let faceplate_scatter_textures = FaceplateScatterTextures::new(&device, resolution);
+        let faceplate_scatter_params = FaceplateScatterParams::default();
+
+        let composite = CompositePipeline::new(&device, format);
+        let composite_params = CompositeParams::new(1.0, TonemapMode::None);
+
+        let egui_renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
+
+        Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            profiler: None,
+            preview_blit: None,
+            surface: None,
+            surface_config: None,
+            accum,
+            hdr,
+            beam_write,
+            beam_params,
+            emission_params,
+            decay,
+            decay_params,
+            spectral_resolve,
+            spectral_resolve_params,
+            faceplate_scatter,
+            faceplate_scatter_textures,
+            faceplate_scatter_params,
+            composite,
+            composite_params,
+            egui_renderer,
+            hdr_output: true,
+        }
+    }
+
+    /// Render a frame to an offscreen texture without touching any surface.
+    /// Used by headless/CLI recording mode.
+    pub fn render_offscreen(
+        &mut self,
+        samples: &[BeamSample],
+        dt: f32,
+        target: &wgpu::TextureView,
+    ) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("headless_frame"),
+            });
+
+        // Beam write pass
+        if !samples.is_empty() {
+            let params = self.beam_params.with_sample_count(samples.len() as u32);
+            self.beam_write.dispatch(
+                &self.device,
+                &mut encoder,
+                samples,
+                &params,
+                &self.emission_params,
+                &self.accum,
+            );
+        }
+
+        // Spectral resolve pass
+        self.spectral_resolve.render(
+            &self.device,
+            &mut encoder,
+            &self.hdr,
+            &self.spectral_resolve_params,
+            &self.accum,
+        );
+
+        // Decay pass
+        let decay_params = self.decay_params.with_dt(dt);
+        self.decay
+            .dispatch(&self.device, &mut encoder, &decay_params, &self.accum);
+
+        // Faceplate scatter passes
+        self.faceplate_scatter.render(
+            &self.device,
+            &mut encoder,
+            &self.hdr,
+            &self.faceplate_scatter_textures,
+            &self.faceplate_scatter_params,
+        );
+
+        // Composite pass → offscreen target
+        self.composite.render(
+            &self.device,
+            &mut encoder,
+            target,
+            &self.composite_params,
+            &self.hdr,
+            &self.faceplate_scatter_textures,
+        );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     pub fn resize(&mut self, width: u32, height: u32, buffer_scale: f32) {
         if width > 0 && height > 0 {
-            self.surface_config.width = width;
-            self.surface_config.height = height;
-            self.surface.configure(&self.device, &self.surface_config);
+            if let (Some(surface), Some(config)) = (&self.surface, &mut self.surface_config) {
+                config.width = width;
+                config.height = height;
+                surface.configure(&self.device, config);
+            }
             let bw = ((width as f32) * buffer_scale).round() as u32;
             let bh = ((height as f32) * buffer_scale).round() as u32;
             self.resize_buffers(Resolution::new(bw.max(1), bh.max(1)));
@@ -237,17 +364,23 @@ impl GpuState {
     pub fn prepare_recording(&mut self, resolution: Resolution) {
         self.resize_buffers(resolution);
         self.composite = CompositePipeline::new(&self.device, wgpu::TextureFormat::Rgba16Float);
-        self.preview_blit = Some(preview_blit::PreviewBlitPipeline::new(
-            &self.device,
-            self.surface_config.format,
-        ));
+        if let Some(config) = &self.surface_config {
+            self.preview_blit = Some(preview_blit::PreviewBlitPipeline::new(
+                &self.device,
+                config.format,
+            ));
+        }
     }
 
     /// Restore GPU state after recording ends.
     pub fn end_recording(&mut self) {
-        let format = self.surface_config.format;
+        let config = self
+            .surface_config
+            .as_ref()
+            .expect("end_recording requires a surface");
+        let format = config.format;
+        let resolution = Resolution::new(config.width, config.height);
         self.composite = CompositePipeline::new(&self.device, format);
-        let resolution = Resolution::new(self.surface_config.width, self.surface_config.height);
         self.resize_buffers(resolution);
         self.preview_blit = None;
     }
@@ -293,7 +426,11 @@ impl GpuState {
         overlay: Option<(&mut egui_wgpu::Renderer, &EguiRenderOutput)>,
         offscreen_target: Option<&wgpu::TextureView>,
     ) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+        let output = self
+            .surface
+            .as_ref()
+            .expect("render() requires a surface; use render_offscreen() for headless")
+            .get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());

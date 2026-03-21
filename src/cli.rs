@@ -1,0 +1,348 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use clap::Parser;
+
+use crate::audio_output::SharedAudioPlayback;
+use crate::gpu::GpuState;
+use crate::phosphor::phosphor_database;
+use crate::recording::ffmpeg::{EncodingPreset, FfmpegConfig, FfmpegPipe};
+use crate::recording::readback::ReadbackBuffer;
+use crate::simulation::InputState;
+use crate::types::{InputMode, Resolution};
+
+#[derive(Parser)]
+#[command(name = "phosphor", about = "Physically-based X-Y CRT simulator")]
+pub struct Cli {
+    /// Record video output (headless mode, audio input only).
+    /// Value is the output file path.
+    #[arg(long)]
+    pub record: Option<PathBuf>,
+
+    /// Audio input file (required with --record)
+    #[arg(long)]
+    pub audio: Option<PathBuf>,
+
+    /// Output resolution (WIDTHxHEIGHT)
+    #[arg(long, default_value = "1920x1080")]
+    pub resolution: String,
+
+    /// Frames per second
+    #[arg(long, default_value_t = 60)]
+    pub fps: u32,
+
+    /// Phosphor type (e.g. P1, P7, P31)
+    #[arg(long, default_value = "P1")]
+    pub phosphor: String,
+
+    /// Encoding preset: h265-hdr10, h265-sdr, av1-hdr10, prores-4444
+    #[arg(long, default_value = "h265-hdr10")]
+    pub preset: String,
+
+    /// Custom ffmpeg arguments (overrides preset)
+    #[arg(long)]
+    pub ffmpeg_args: Option<String>,
+
+    /// Beam intensity (0.0 - 5.0)
+    #[arg(long, default_value_t = 0.5)]
+    pub intensity: f32,
+
+    /// Beam focus / spot size (0.1 - 10.0)
+    #[arg(long, default_value_t = 0.5)]
+    pub focus: f32,
+
+    /// Pre-roll frames (warm up phosphor before recording)
+    #[arg(long)]
+    pub pre_roll: Option<u32>,
+}
+
+fn parse_resolution(s: &str) -> anyhow::Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("resolution must be WIDTHxHEIGHT (e.g. 1920x1080)");
+    }
+    let w: u32 = parts[0].parse()?;
+    let h: u32 = parts[1].parse()?;
+    if w == 0 || h == 0 {
+        anyhow::bail!("resolution dimensions must be > 0");
+    }
+    Ok((w, h))
+}
+
+fn parse_preset(s: &str) -> anyhow::Result<EncodingPreset> {
+    EncodingPreset::from_slug(s).ok_or_else(|| {
+        let slugs: Vec<&str> = EncodingPreset::ALL.iter().map(|p| p.slug()).collect();
+        anyhow::anyhow!(
+            "unknown preset '{}'; valid options: {}",
+            s,
+            slugs.join(", ")
+        )
+    })
+}
+
+pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
+    // Validate arguments
+    let audio_path = cli
+        .audio
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--audio is required with --record"))?;
+    let output_path = cli
+        .record
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("--record output path is required"))?;
+
+    // Check ffmpeg
+    crate::recording::ffmpeg::check_ffmpeg()
+        .map_err(|e| anyhow::anyhow!("ffmpeg check failed: {e}"))?;
+
+    let (width, height) = parse_resolution(&cli.resolution)?;
+    let preset = parse_preset(&cli.preset)?;
+    let resolution = Resolution::new(width, height);
+
+    // Decode audio
+    eprintln!("Decoding audio: {}", audio_path.display());
+    let decoded = crate::beam::audio::decode_audio_file(audio_path)?;
+    let sample_rate = decoded.sample_rate;
+    let channels = decoded.channels as usize;
+    let total_audio_frames = decoded.samples.len() / channels;
+    let duration_secs = total_audio_frames as f64 / sample_rate as f64;
+    let total_frames = (duration_secs * cli.fps as f64).ceil() as u64;
+    let samples_per_frame = (sample_rate as f32 / cli.fps as f32).round() as usize;
+    let pre_roll_frames = cli.pre_roll.unwrap_or(cli.fps); // default 1 second
+
+    eprintln!(
+        "Audio: {} Hz, {:.1}s, {} frames at {} fps",
+        sample_rate, duration_secs, total_frames, cli.fps,
+    );
+
+    // Create shared audio playback state (no cpal, just data)
+    let shared = Arc::new(SharedAudioPlayback::new(decoded));
+    shared.playing.store(true, Ordering::Relaxed);
+
+    // Find phosphor
+    let db = phosphor_database();
+    let phosphor = db
+        .iter()
+        .find(|p| p.designation.eq_ignore_ascii_case(&cli.phosphor))
+        .ok_or_else(|| {
+            let names: Vec<&str> = db.iter().map(|p| p.designation.as_str()).collect();
+            anyhow::anyhow!(
+                "unknown phosphor '{}'; available: {}",
+                cli.phosphor,
+                names.join(", ")
+            )
+        })?;
+
+    eprintln!(
+        "Phosphor: {} ({})",
+        phosphor.designation, phosphor.description
+    );
+
+    // Create wgpu instance/adapter/device (headless — no surface)
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..Default::default()
+    });
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .map_err(|e| anyhow::anyhow!("no suitable GPU adapter found: {e}"))?;
+
+    eprintln!("GPU adapter: {}", adapter.get_info().name);
+
+    let features = wgpu::Features::FLOAT32_FILTERABLE;
+    let adapter_limits = adapter.limits();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("phosphor-headless"),
+        required_features: features,
+        required_limits: wgpu::Limits {
+            max_storage_buffer_binding_size:
+                adapter_limits.max_storage_buffer_binding_size.max(1 << 30),
+            max_buffer_size: adapter_limits.max_buffer_size.max(1 << 30),
+            ..wgpu::Limits::default()
+        },
+        ..Default::default()
+    }))
+    .map_err(|e| anyhow::anyhow!("failed to create GPU device: {e}"))?;
+
+    // Create headless GpuState
+    let mut gpu = GpuState::new_headless(instance, adapter, device, queue, resolution);
+    gpu.switch_phosphor(phosphor);
+
+    // Set beam params
+    gpu.beam_params.sigma_core = cli.focus;
+    gpu.beam_params.sigma_halo = 6.0;
+    gpu.beam_params.halo_fraction = 0.03;
+    gpu.composite_params.exposure = cli.intensity;
+    gpu.composite_params.viewport_offset = [0.0, 0.0];
+    gpu.composite_params.viewport_size = [width as f32, height as f32];
+
+    // Create offscreen texture and readback buffer
+    let offscreen_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("headless_offscreen"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let offscreen_view = offscreen_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let readback = ReadbackBuffer::new(&gpu.device, width, height);
+
+    // Create InputState for audio generation
+    let mut input = InputState::default();
+    input.mode = InputMode::Audio;
+    input.audio.shared = Some(Arc::clone(&shared));
+
+    let aspect = width as f32 / height as f32;
+    let dt = 1.0 / cli.fps as f32;
+
+    // Install SIGINT handler
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let cancelled = Arc::clone(&cancelled);
+        ctrlc::set_handler(move || {
+            cancelled.store(true, Ordering::Relaxed);
+            eprintln!("\nInterrupted — finishing current frame...");
+        })
+        .ok();
+    }
+
+    // Pre-roll: run frames without recording to warm up phosphor decay
+    eprintln!("Pre-rolling {} frames...", pre_roll_frames);
+    for _ in 0..pre_roll_frames {
+        if cancelled.load(Ordering::Relaxed) {
+            eprintln!("Cancelled during pre-roll");
+            return Ok(());
+        }
+
+        let samples = input.generate_audio_samples_recording(
+            cli.focus,
+            aspect,
+            width as f32,
+            samples_per_frame,
+        );
+        gpu.render_offscreen(&samples, dt, &offscreen_view);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    // Rewind audio for actual recording
+    input.rewind_recording_audio();
+
+    // Spawn ffmpeg pipe
+    let custom_args = cli
+        .ffmpeg_args
+        .as_ref()
+        .map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>());
+
+    let ffmpeg_config = FfmpegConfig {
+        width,
+        height,
+        fps: cli.fps as f64,
+        output_path: output_path.clone(),
+        audio_path: Some(audio_path.clone()),
+        preset,
+        custom_args,
+    };
+
+    let mut pipe = FfmpegPipe::spawn(&ffmpeg_config)
+        .map_err(|e| anyhow::anyhow!("failed to spawn ffmpeg: {e}"))?;
+
+    eprintln!(
+        "Recording: {}x{} @ {} fps, {} → {}",
+        width,
+        height,
+        cli.fps,
+        audio_path.display(),
+        output_path.display(),
+    );
+
+    let started = Instant::now();
+    let mut frame = 0u64;
+
+    // Main render loop
+    while frame < total_frames {
+        if cancelled.load(Ordering::Relaxed) {
+            eprintln!("Cancelled at frame {}/{}", frame, total_frames);
+            break;
+        }
+
+        // Generate audio samples for this frame
+        let samples = input.generate_audio_samples_recording(
+            cli.focus,
+            aspect,
+            width as f32,
+            samples_per_frame,
+        );
+
+        // Render offscreen
+        gpu.render_offscreen(&samples, dt, &offscreen_view);
+
+        // Readback
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("headless_readback"),
+            });
+        readback.copy_from_texture(&mut encoder, &offscreen_texture);
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        let mut frame_data = Vec::new();
+        readback.read_mapped(&gpu.device, |data| {
+            frame_data.extend_from_slice(data);
+        });
+
+        // Write to ffmpeg
+        if let Err(e) = pipe.write_frame(&frame_data, height) {
+            eprintln!("Error writing frame to ffmpeg: {e}");
+            break;
+        }
+
+        frame += 1;
+
+        // Progress every 60 frames or on last frame
+        if frame.is_multiple_of(60) || frame == total_frames {
+            let elapsed = started.elapsed().as_secs_f64();
+            let fps_actual = frame as f64 / elapsed;
+            let pct = (frame as f64 / total_frames as f64) * 100.0;
+            let eta = if fps_actual > 0.0 {
+                (total_frames - frame) as f64 / fps_actual
+            } else {
+                0.0
+            };
+            eprint!(
+                "\r  {:.1}% ({}/{}) — {:.1} fps — ETA {:.0}s    ",
+                pct, frame, total_frames, fps_actual, eta
+            );
+        }
+    }
+
+    eprintln!();
+
+    // Finish ffmpeg
+    let elapsed = started.elapsed();
+    drop(pipe);
+
+    eprintln!(
+        "Done: {} frames in {:.1}s ({:.1} fps average)",
+        frame,
+        elapsed.as_secs_f64(),
+        frame as f64 / elapsed.as_secs_f64(),
+    );
+    eprintln!("Output: {}", output_path.display());
+
+    Ok(())
+}

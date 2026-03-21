@@ -514,12 +514,10 @@ impl App {
                 };
 
                 // Run media overlay (separate egui context, works in both modes)
+                let sc = gpu.surface_config.as_ref().unwrap();
                 let viewport_rect = egui::Rect::from_min_size(
                     egui::pos2(ui.panel_width, 0.0),
-                    egui::vec2(
-                        gpu.surface_config.width as f32 - ui.panel_width,
-                        gpu.surface_config.height as f32,
-                    ),
+                    egui::vec2(sc.width as f32 - ui.panel_width, sc.height as f32),
                 );
                 let overlay_output = ui.media_overlay.run(
                     window,
@@ -536,10 +534,9 @@ impl App {
                         0.0
                     };
                     gpu.composite_params.viewport_offset = [sidebar_width, 0.0];
-                    gpu.composite_params.viewport_size = [
-                        gpu.surface_config.width as f32 - sidebar_width,
-                        gpu.surface_config.height as f32,
-                    ];
+                    let sc = gpu.surface_config.as_ref().unwrap();
+                    gpu.composite_params.viewport_size =
+                        [sc.width as f32 - sidebar_width, sc.height as f32];
 
                     if let Some(tx) = &self.sim_commands {
                         crate::frame::dispatch_sim_commands(
@@ -570,7 +567,8 @@ impl App {
                 ) {
                     Ok(()) => {}
                     Err(wgpu::SurfaceError::Lost) => {
-                        let (w, h) = (gpu.surface_config.width, gpu.surface_config.height);
+                        let sc = gpu.surface_config.as_ref().unwrap();
+                        let (w, h) = (sc.width, sc.height);
                         gpu.resize(w, h, ui.engineer.accum_resolution_scale);
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -730,8 +728,11 @@ impl ApplicationHandler for App {
 
         let mut gpu = GpuState::new(window.clone());
         let mut ui = UiState::new(&window);
-        ui.media_overlay
-            .init(&window, &gpu.device, gpu.surface_config.format);
+        ui.media_overlay.init(
+            &window,
+            &gpu.device,
+            gpu.surface_config.as_ref().unwrap().format,
+        );
         gpu.switch_phosphor(ui.selected_phosphor());
 
         // Spawn simulation thread
