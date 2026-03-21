@@ -1,4 +1,5 @@
 pub mod engineer_panel;
+pub mod media_overlay;
 pub mod scope_panel;
 
 use std::path::PathBuf;
@@ -40,7 +41,6 @@ pub struct AudioUiState {
     pub load_error: Option<String>,
     pub pending_file: Option<PathBuf>,
 }
-
 
 /// UI-only vector state (segment data lives on the sim thread).
 pub struct VectorUiState {
@@ -88,6 +88,7 @@ pub struct UiState {
     pub panel_visible: bool,
     pub panel_width: f32,
     pub accum_size: Option<Resolution>,
+    pub media_overlay: media_overlay::MediaOverlay,
 }
 
 impl UiState {
@@ -124,6 +125,7 @@ impl UiState {
             panel_visible: true,
             panel_width: 0.0,
             accum_size: None,
+            media_overlay: media_overlay::MediaOverlay::default(),
         }
     }
 
@@ -177,6 +179,19 @@ impl UiState {
                         }
                     });
             }
+
+            // Media overlay — viewport is the area not covered by the panel
+            let screen = egui_ctx.viewport_rect();
+            let viewport = egui::Rect::from_min_size(
+                egui::pos2(self.panel_width, 0.0),
+                egui::vec2(screen.width() - self.panel_width, screen.height()),
+            );
+            self.media_overlay.show(
+                egui_ctx,
+                viewport,
+                self.input_mode,
+                self.audio_ui.shared.as_ref(),
+            );
         });
 
         let egui::FullOutput {

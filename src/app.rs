@@ -175,6 +175,9 @@ impl App {
                 if let Some(controls) = ControlsWindow::new(event_loop, gpu, ui.ctx.clone()) {
                     self.controls = Some(controls);
                     self.mode = WindowMode::Detached;
+                    if let Some(ui) = &mut self.ui {
+                        ui.panel_visible = false;
+                    }
                     tracing::info!("Detached controls to separate window");
                 }
             }
@@ -190,10 +193,8 @@ impl App {
     }
 
     fn handle_viewport_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
-        // Only pass events to egui in Combined mode (viewport shouldn't
-        // consume events for an invisible panel in Detached mode)
-        if self.mode == WindowMode::Combined
-            && let Some(ui) = &mut self.ui
+        // Pass events to egui (handles both panel in Combined and overlay in Detached mode)
+        if let Some(ui) = &mut self.ui
             && let Some(window) = &self.window
         {
             let response = ui.on_event(window, &event);
@@ -264,18 +265,14 @@ impl App {
                     buffer_pending: self.sim_consumer.as_ref().map_or(0, |c| c.pending()),
                 };
 
-                // Run egui frame only in Combined mode
-                let egui_output = if self.mode == WindowMode::Combined {
-                    let timings = gpu.profiler.as_ref().map(|p| &p.history);
-                    Some(ui.run(
-                        window,
-                        timings,
-                        self.sim_stats.as_ref(),
-                        Some(&sim_frame_info),
-                    ))
-                } else {
-                    None
-                };
+                // Run egui frame (overlay visible in both Combined and Detached modes)
+                let timings = gpu.profiler.as_ref().map(|p| &p.history);
+                let egui_output = Some(ui.run(
+                    window,
+                    timings,
+                    self.sim_stats.as_ref(),
+                    Some(&sim_frame_info),
+                ));
 
                 // Forward UI state changes to the simulation thread
                 let sidebar_width = if self.mode == WindowMode::Combined {
