@@ -146,12 +146,19 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
         ..Default::default()
     });
 
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|e| anyhow::anyhow!("no suitable GPU adapter found: {e}"))?;
+    // enumerate_adapters works without a surface on Vulkan (request_adapter
+    // with compatible_surface: None fails on some Linux Vulkan drivers).
+    let adapter = instance
+        .enumerate_adapters(wgpu::Backends::PRIMARY)
+        .into_iter()
+        .find(|a| a.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
+        .or_else(|| {
+            instance
+                .enumerate_adapters(wgpu::Backends::PRIMARY)
+                .into_iter()
+                .next()
+        })
+        .ok_or_else(|| anyhow::anyhow!("no suitable GPU adapter found"))?;
 
     eprintln!("GPU adapter: {}", adapter.get_info().name);
 
@@ -332,9 +339,11 @@ pub fn run_headless(cli: &Cli) -> anyhow::Result<()> {
 
     eprintln!();
 
-    // Finish ffmpeg
+    // Finish ffmpeg — close stdin and wait for it to write the container trailer
     let elapsed = started.elapsed();
-    drop(pipe);
+    if let Err(e) = pipe.finish() {
+        eprintln!("Warning: ffmpeg did not exit cleanly: {e}");
+    }
 
     eprintln!(
         "Done: {} frames in {:.1}s ({:.1} fps average)",
