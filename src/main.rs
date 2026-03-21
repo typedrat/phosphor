@@ -8,6 +8,7 @@ mod frame;
 mod gpu;
 mod phosphor;
 mod presets;
+mod recording;
 mod simulation;
 mod simulation_stats;
 mod types;
