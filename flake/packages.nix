@@ -25,6 +25,7 @@
       libxcursor
       libxi
       libxrandr
+      alsa-lib
     ];
 
     src = pkgs.lib.cleanSourceWith {
@@ -38,7 +39,7 @@
       inherit src;
       strictDeps = true;
 
-      buildInputs = runtimeLibs ++ (with pkgs; [alsa-lib]);
+      buildInputs = runtimeLibs;
       nativeBuildInputs = with pkgs; [pkg-config];
     };
 
