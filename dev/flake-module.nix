@@ -1,12 +1,11 @@
 {inputs, ...}: {
   imports = [
     inputs.github-actions-nix.flakeModules.default
-    inputs.files.flakeModules.default
+    "${inputs.files}/flake-module.nix"
   ];
 
   perSystem = {
     config,
-    system,
     pkgs,
     runtimeLibs,
     commonArgs,
@@ -14,11 +13,7 @@
     self',
     lib,
     ...
-  }: let
-    hk = inputs.hk.packages.${system}.hk.overrideAttrs (_old: {
-      doCheck = false;
-    });
-  in {
+  }: {
     devShells.default = craneLib.devShell {
       inherit (self') checks;
 
@@ -42,7 +37,7 @@
         taplo
 
         # Markdown
-        nodePackages.prettier
+        prettier
 
         # Commit messages
         gitlint
@@ -64,18 +59,12 @@
     };
 
     # Configure files module to sync generated workflows to .github/workflows/
-    files.files =
-      lib.mapAttrsToList (name: drv: {
-        path_ = ".github/workflows/${name}";
-        inherit drv;
-      })
-      config.githubActions.workflowFiles;
+    files = {
+      file =
+        lib.mapAttrs' (name: source: lib.nameValuePair ".github/workflows/${name}" {inherit source;})
+        config.githubActions.workflowFiles;
 
-    # Expose the files writer as an app
-    apps.write-files = {
-      type = "app";
-      program = lib.getExe config.files.writer.drv;
-      meta.description = "Write generated files to the repository";
+      writer.app = true;
     };
 
     # CI workflow configuration

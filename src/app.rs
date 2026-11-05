@@ -557,9 +557,11 @@ impl App {
                 }
 
                 // Build overlay render args (need mutable ref to overlay renderer)
-                let overlay_render = overlay_output
-                    .as_ref()
-                    .and_then(|output| ui.media_overlay.renderer.as_mut().map(|r| (r, output)));
+                let overlay_render = ui
+                    .media_overlay
+                    .renderer
+                    .as_mut()
+                    .zip(overlay_output.as_ref());
 
                 // Get offscreen view for recording
                 let offscreen_view = self.recording.as_ref().map(|r| &r.offscreen_view);

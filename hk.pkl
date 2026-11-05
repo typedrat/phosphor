@@ -1,5 +1,5 @@
-amends "package://github.com/jdx/hk/releases/download/v1.25.0/hk@1.25.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.25.0/hk@1.25.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.8.1/hk@2.8.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.8.1/hk@2.8.1#/Builtins.pkl"
 
 default_branch = "main"
 
@@ -20,9 +20,9 @@ local linters = new Mapping<String, Step> {
 
   ["statix"] = new Step {
     glob = List("**/*.nix")
-    check = "statix check -- {{files}}"
-    fix = "statix fix -- {{files}}"
-    batch = true
+    // statix accepts a single target per invocation
+    check = "for f in {{files}}; do statix check -- \"$f\" || exit 1; done"
+    fix = "for f in {{files}}; do statix fix -- \"$f\" || exit 1; done"
   }
 
   // Rust:

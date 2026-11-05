@@ -118,7 +118,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let elapsed = load_accum(coord.x, coord.y, group.elapsed_layer);
                 group_energy += peak * pow(
                     params.power_law_alpha / (elapsed + params.power_law_alpha),
-                    params.power_law_beta);
+                    params.power_law_beta
+                );
             }
         }
 
@@ -139,9 +140,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // XYZ -> linear sRGB (IEC 61966-2-1)
     var rgb = vec3<f32>(
-         3.2406 * X - 1.5372 * Y - 0.4986 * Z,
+        3.2406 * X - 1.5372 * Y - 0.4986 * Z,
         -0.9689 * X + 1.8758 * Y + 0.0415 * Z,
-         0.0557 * X - 0.2040 * Y + 1.0570 * Z,
+        0.0557 * X - 0.2040 * Y + 1.0570 * Z,
     );
 
     // Gamut mapping for phosphor colors outside sRGB
